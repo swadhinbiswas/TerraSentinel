@@ -1,0 +1,64 @@
+name: deploy_dashboard
+
+# Optional: Cloudflare Pages can auto-deploy straight from git. This workflow exists
+# for teams who want the deploy *gated* behind CI — a broken type check or a failing
+# model validation should stop a deploy, not land on the dashboard afterwards.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "serving/dashboard/**"
+      - ".github/workflows/deploy_dashboard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: deploy-dashboard
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: build + deploy to Cloudflare Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: serving/dashboard/package-lock.json
+
+      - name: Install
+        working-directory: serving/dashboard
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check and build
+        working-directory: serving/dashboard
+        run: |
+          npx astro check
+          npx astro build
+
+      - name: Deploy to Cloudflare Pages
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: serving/dashboard
+          command: pages deploy dist --project-name=terrasentinel-dashboard
+          # Turso credentials live in the Pages dashboard as encrypted environment
+          # variables, not here: this file is committed, and a secret in it is a leak.
+
+      - name: Alert on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          python -m pip install --quiet --disable-pip-version-check requests
+          python -m ops.notify --message "deploy_dashboard failed on ${{ github.ref_name }}"

@@ -1,0 +1,126 @@
+name: collect_data
+
+# Three cadences, one workflow. `github.event.schedule` carries the cron that
+# fired, so the matrix is filtered by matching each source's registered cadence
+# against the trigger — the cron strings here and in collectors/config.py
+# SourceSpec.cadence_cron must stay in sync.
+on:
+  schedule:
+    - cron: "15 */6 * * *"   # FIRMS near-real-time: every 6 hours
+    - cron: "30 3 * * *"     # Sentinel-2/1 composites: daily
+    - cron: "45 4 * * 1"     # NOAA / NSIDC: weekly, Mondays
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Which source to collect"
+        type: choice
+        options: [all, firms, sentinel, noaa_nsidc]
+        default: all
+      regions:
+        description: "Comma list of region ids, or 'all'"
+        type: string
+        default: all
+      dry_run:
+        description: "Fetch and validate locally, skip the HF upload"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collect-data-${{ github.event.schedule || inputs.source || 'manual' }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: collect ${{ matrix.source }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {source: firms, module: firms_collector, extras: ""}
+          - {source: sentinel, module: sentinel_gee_collector, extras: "[gee]"}
+          - {source: noaa_nsidc, module: noaa_nsidc_collector, extras: "[noaa]"}
+    steps:
+      - name: Decide whether this source runs now
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          REQUESTED: ${{ inputs.source }}
+          SOURCE: ${{ matrix.source }}
+        run: |
+          enabled=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$REQUESTED" = "all" ] || [ -z "$REQUESTED" ] || [ "$REQUESTED" = "$SOURCE" ]; then
+              enabled=true
+            fi
+          elif [ "$SOURCE" = "firms" ] && [ "$SCHEDULE" = "15 */6 * * *" ]; then
+            enabled=true
+          elif [ "$SOURCE" = "sentinel" ] && [ "$SCHEDULE" = "30 3 * * *" ]; then
+            enabled=true
+          elif [ "$SOURCE" = "noaa_nsidc" ] && [ "$SCHEDULE" = "45 4 * * 1" ]; then
+            enabled=true
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          enable-cache: true
+
+      - name: Install
+        if: steps.gate.outputs.enabled == 'true'
+        run: uv pip install --system -e ".${{ matrix.extras }}"
+
+      - name: Materialise GEE service account
+        if: steps.gate.outputs.enabled == 'true' && matrix.source == 'sentinel'
+        env:
+          GEE_SA_JSON: ${{ secrets.GEE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GEE_SA_JSON" ]; then
+            echo "::error::GEE_SERVICE_ACCOUNT_JSON secret is not set"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$GEE_SA_JSON" > "$RUNNER_TEMP/gee-service-account.json"
+          echo "GEE_SERVICE_ACCOUNT_JSON=$RUNNER_TEMP/gee-service-account.json" >> "$GITHUB_ENV"
+
+      - name: Collect
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
+          GEE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GEE_SERVICE_ACCOUNT_EMAIL }}
+          GEE_PROJECT: ${{ secrets.GEE_PROJECT }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          python -m "collectors.${{ matrix.module }}" \
+            --regions "${{ inputs.regions || 'all' }}" \
+            --workflow collect_data \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            --log-json
+
+      - name: Alert on failure
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          python -m pip install --quiet --disable-pip-version-check requests
+          python -m ops.notify \
+            --message "collect_data failed for ${{ matrix.source }} (${{ github.event_name }})" \
+            --context '{"source":"${{ matrix.source }}","regions":"${{ inputs.regions || 'all' }}"}'

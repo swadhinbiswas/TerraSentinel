@@ -1,0 +1,128 @@
+name: ci
+
+# Tests need no credentials: every external service is mocked at the HTTP layer,
+# so a fork or a first-time clone can run the whole suite green.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: lint + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install (dev + transform + ml)
+        run: uv pip install --system -e ".[dev,transform,ml,ml-tracking]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Unit + integration tests
+        run: python -m pytest tests/ -q --cov --cov-report=term-missing:skip-covered
+
+      - name: dbt seeds must match the Python region registry
+        run: python -m tools.export_seeds --check
+
+      - name: Generate synthetic bronze with known injected anomalies
+        run: python -m tools.synthetic_bronze --out data/bronze --clean --inject-anomaly
+
+      - name: Enumerate the synthetic lake
+        # Same code path the production transform uses, so a regression in glob
+        # selection fails here rather than in the nightly job.
+        run: |
+          python -m tools.bronze_manifest \
+            --local-root data/bronze --root data/bronze \
+            --out transform/target/bronze_globs.json
+          python -c "
+          import json
+          globs = json.load(open('transform/target/bronze_globs.json'))
+          print(json.dumps({'bronze_root': 'data/bronze', 'bronze_globs': globs}))
+          " > transform/target/dbt_vars.json
+
+      - name: dbt build (models + schema tests) against the synthetic lake
+        run: |
+          dbt build \
+            --project-dir transform --profiles-dir transform \
+            --vars "$(cat transform/target/dbt_vars.json)" \
+            --no-partial-parse
+
+      - name: Injected anomalies must be detected
+        run: python -m tools.assert_anomalies_detected --duckdb-path transform/terrasentinel.duckdb
+
+      - name: Train and validate on the synthetic lake
+        # The known-events gate is deliberately NOT applied here: those are real,
+        # dated events and this lake is synthetic. The offline gate is the injected
+        # anomaly check above; the real-event regression runs against real data in
+        # train_model.yml. The check still runs and reports, so a catastrophic
+        # regression is visible in the CI log.
+        env:
+          MLFLOW_DISABLE_AGENT_HINT: "1"
+        run: |
+          python -m ml.train.train_isolation_forest \
+            --duckdb-path transform/terrasentinel.duckdb \
+            --out-dir ml/artifacts/ci \
+            --dataset-commit "ci-${{ github.sha }}"
+          python -m tools.assert_known_events_reported --out-dir ml/artifacts/ci
+
+      - name: Batch scoring shapes predictions without a database
+        run: |
+          python -m ml.scoring.batch_score \
+            --duckdb-path transform/terrasentinel.duckdb \
+            --model-dir ml/artifacts/ci \
+            --out ml/artifacts/ci/predictions.parquet \
+            --dry-run
+
+      - name: Gold sync must shape a payload without a database
+        run: python -m sync.push_gold_to_turso --duckdb-path transform/terrasentinel.duckdb --dry-run
+
+      - name: Dashboard build (type-checked, no credentials needed)
+        # `astro check` is the gate that matters here: it caught a `class` vs
+        # `className` mistake on React islands (silently dropping every style) and a
+        # call site left on an old function signature.
+        working-directory: serving/dashboard
+        run: |
+          npm ci --no-audit --no-fund
+          npx astro check
+          npx astro build
+
+      - name: Collectors fail closed on a missing credential
+        run: |
+          python -c "
+          from collectors.config import MissingCredential, preflight_sources
+          try:
+              preflight_sources(['firms'])
+          except MissingCredential as exc:
+              assert 'FIRMS_MAP_KEY' in str(exc), exc
+              print('preflight correctly refused to start without credentials')
+          else:
+              raise SystemExit('preflight should have failed without FIRMS_MAP_KEY')
+          "
+
+      - name: Alert on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          python -m pip install --quiet --disable-pip-version-check requests
+          python -m ops.notify --message "ci failed (${{ github.workflow }} on ${{ github.ref_name }})"

@@ -1,0 +1,133 @@
+name: train_model
+
+# Rebuild features, train, validate against documented real events, publish to the model
+# registry, then batch-score the latest data. Every step is offline-testable; the runs
+# here only add the Hub and the serving database.
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # weekly, after the transform
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Train and validate, but do not publish or score"
+        type: boolean
+        default: false
+      require_known_events:
+        description: "Fail the run if a documented real event is missed"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: train-model
+  cancel-in-progress: false
+
+jobs:
+  train:
+    name: train, validate, publish, score
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv pip install --system -e ".[transform,ml,ml-tracking]"
+
+      - name: Mirror the bronze lake
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+          HF_BRONZE_REPO: ${{ secrets.HF_NAMESPACE }}/TerraSentinel
+        run: python -m tools.sync_bronze --local-dir data/bronze_hf
+
+      - name: Resolve the lake revision for lineage
+        id: lake
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+        run: |
+          sha=$(python -c "
+          from collectors.config import hf_repo
+          from storage.hf_dataset_reader import HFDatasetReader
+          print(HFDatasetReader(repo_id=hf_repo('bronze')).commit_sha())
+          ")
+          echo "commit=$sha" >> "$GITHUB_OUTPUT"
+          echo "training on bronze revision $sha"
+
+      - name: dbt build (features depend on the gold marts)
+        run: |
+          set -euo pipefail
+          python -m tools.bronze_manifest \
+            --local-root data/bronze_hf --root data/bronze_hf \
+            --out transform/target/bronze_globs.json --allow-missing > /dev/null
+          python - <<'PYEOF' > transform/target/dbt_vars.json
+          import json
+          globs = json.load(open("transform/target/bronze_globs.json"))
+          print(json.dumps({"bronze_root": "data/bronze_hf", "bronze_globs": globs}))
+          PYEOF
+          dbt build \
+            --project-dir transform --profiles-dir transform \
+            --vars "$(cat transform/target/dbt_vars.json)" \
+            --no-partial-parse
+
+      - name: Train and validate
+        env:
+          MLFLOW_DISABLE_AGENT_HINT: "1"
+        run: |
+          python -m ml.train.train_isolation_forest \
+            --duckdb-path transform/terrasentinel.duckdb \
+            --out-dir ml/artifacts/isolation_forest_fire \
+            --dataset-commit "${{ steps.lake.outputs.commit }}" \
+            ${{ inputs.require_known_events != false && '--require-known-events' || '' }}
+
+      - name: Publish to the model registry
+        if: ${{ !inputs.dry_run }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+        run: |
+          python -m ml.registry.push_model_to_hf \
+            --bundle-dir ml/artifacts/isolation_forest_fire
+
+      - name: Batch-score the latest data into the serving database
+        if: ${{ !inputs.dry_run }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          python -m ml.scoring.batch_score \
+            --duckdb-path transform/terrasentinel.duckdb \
+            --model-dir ml/artifacts/isolation_forest_fire \
+            --out ml/artifacts/predictions.parquet
+
+      - name: Upload training artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            ml/artifacts/
+            ml/runs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Alert on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          python -m pip install --quiet --disable-pip-version-check requests
+          python -m ops.notify  --message "train_model failed (${{ github.event_name }})"

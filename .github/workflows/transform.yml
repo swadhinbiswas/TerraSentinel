@@ -1,0 +1,121 @@
+name: transform
+
+# dbt + DuckDB over the bronze lake, then the gold marts into Turso.
+#
+# Runs after the daily collection so the newest Sentinel composites are present.
+# Reading bronze needs no credentials when the repo is public: DuckDB's httpfs
+# fetches hf:// paths directly. A private bronze repo would additionally need
+# `CREATE SECRET (TYPE HUGGINGFACE, TOKEN ...)` before the build.
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Shape the payload and run every model/test, but write nothing to Turso"
+        type: boolean
+        default: false
+      skip_sync:
+        description: "Run dbt only; do not touch Turso at all"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One writer at a time: a DuckDB file and the gold tables are single-writer resources.
+concurrency:
+  group: transform
+  cancel-in-progress: false
+
+jobs:
+  transform:
+    name: dbt build + gold sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv pip install --system -e ".[transform]"
+
+      - name: Seeds must match the Python region registry
+        run: python -m tools.export_seeds --check
+
+      - name: Mirror the bronze lake
+        # One listing plus parallel CDN fetches, instead of DuckDB re-listing the
+        # Hub repo tree on every query that touches an hf:// path. A build used to
+        # make dozens of API calls against a 1000-per-5-minutes quota; now the
+        # build makes none. `--revision` can pin a known lake state.
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+          HF_BRONZE_REPO: ${{ secrets.HF_NAMESPACE }}/TerraSentinel
+        run: python -m tools.sync_bronze --local-dir data/bronze_hf
+
+      - name: Enumerate the mirrored lake
+        # Which prefixes exist still has to be discovered: a glob for a missing
+        # directory is an error, and right after a backfill there is no live
+        # prefix yet. This is a local filesystem walk, so it costs no API calls.
+        run: |
+          set -euo pipefail
+          python -m tools.bronze_manifest \
+            --local-root data/bronze_hf --root data/bronze_hf \
+            --out transform/target/bronze_globs.json \
+            --allow-missing > /dev/null
+          python - <<'PYEOF' > transform/target/dbt_vars.json
+          import json
+          globs = json.load(open("transform/target/bronze_globs.json"))
+          print(json.dumps({"bronze_root": "data/bronze_hf", "bronze_globs": globs}))
+          PYEOF
+          cat transform/target/bronze_globs.json
+
+      - name: dbt build (models + tests)
+        run: |
+          dbt build \
+            --project-dir transform --profiles-dir transform \
+            --vars "$(cat transform/target/dbt_vars.json)" \
+            --no-partial-parse
+
+      - name: Sync gold marts to Turso
+        if: ${{ !inputs.skip_sync }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          python -m sync.push_gold_to_turso \
+            --duckdb-path transform/terrasentinel.duckdb \
+            ${{ inputs.dry_run && '--dry-run --no-metadata' || '' }}
+
+      - name: Upload dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-target
+          path: |
+            transform/target/manifest.json
+            transform/target/run_results.json
+            transform/logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Alert on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          python -m pip install --quiet --disable-pip-version-check requests
+          python -m ops.notify \
+            --message "transform failed (${{ github.event_name }})" \
+            --context '{"dry_run":"${{ inputs.dry_run }}","skip_sync":"${{ inputs.skip_sync }}"}'
