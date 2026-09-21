@@ -1,0 +1,11 @@
+name = "terrasentinel-dashboard"
+compatibility_date = "2025-01-01"
+# Required, and the error says so if you omit it: Astro's image service pulls in sharp,
+# which requires node builtins (fs, path) even though this dashboard uses no images.
+# `nodejs_compat` supplies them in workerd.
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+# Turso credentials are NOT set here. They are Cloudflare Pages environment variables
+# (encrypted), read server-side in src/lib/turso.ts. This file is committed, so a secret
+# in it would be a leak.

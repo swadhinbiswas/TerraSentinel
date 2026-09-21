@@ -1,0 +1,93 @@
+---
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { loadStories } from "@/lib/stories";
+import { turso } from "@/lib/turso";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+
+const env = Astro.locals.runtime?.env ?? import.meta.env;
+
+// Every number in the prose below is interpolated from the mart at render time, so a
+// story cannot drift from the data it describes.
+const stories = await loadStories(turso(env));
+---
+
+<Layout title="TerraSentinel — stories" description="Documented anomalies, read from the data at render time.">
+  <section class="mb-6 max-w-3xl">
+    <h2 class="text-xl font-semibold tracking-tight">Four things worth looking at</h2>
+    <p class="mt-2 text-sm text-[var(--color-muted)]">
+      Each write-up is generated from a live query, not from prose written once and left to rot.
+      The numbers are read from the serving database when the page renders; the SQL behind each
+      story is shown so you can check it yourself, or open it in the
+      <a href="/sql" class="text-[var(--color-accent)] underline decoration-dotted">SQL console</a>.
+      Where the two detectors disagree, that is reported rather than smoothed over.
+    </p>
+  </section>
+
+  <div class="space-y-6">
+    {stories.map((story) => (
+      <Card>
+        <CardHeader>
+          <p class="text-xs uppercase tracking-wide text-[var(--color-accent)]">{story.kicker}</p>
+          <CardTitle className="text-lg">{story.title}</CardTitle>
+          <CardDescription>{story.standfirst}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-5 lg:grid-cols-[1.6fr_1fr]">
+          <div class="space-y-3 text-sm leading-relaxed">
+            {story.body.map((paragraph) => <p>{paragraph}</p>)}
+            {story.caveat && (
+              <p class="rounded border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-surface)_70%,transparent)] px-3 py-2 text-xs text-[var(--color-muted)]">
+                <strong class="text-[var(--color-foreground)]">Caveat.</strong> {story.caveat}
+              </p>
+            )}
+          </div>
+          <div>
+            <dl class="space-y-2">
+              {story.stats.map((stat) => (
+                <div class="flex items-baseline justify-between gap-3 border-b border-[var(--color-border)]/60 pb-1">
+                  <dt class="text-xs text-[var(--color-muted)]">
+                    {stat.label}
+                    {stat.hint && <span class="ml-1 opacity-70">({stat.hint})</span>}
+                  </dt>
+                  <dd class="tabular-nums text-sm font-medium">{stat.value}</dd>
+                </div>
+              ))}
+            </dl>
+            <details class="mt-4">
+              <summary class="cursor-pointer text-xs text-[var(--color-muted)] hover:text-[var(--color-foreground)]">
+                SQL behind this story
+              </summary>
+              <pre class="mt-2 overflow-x-auto rounded border border-[var(--color-border)] bg-[var(--color-background)] p-2 font-mono text-[11px] leading-relaxed">{story.query}</pre>
+            </details>
+          </div>
+        </CardContent>
+      </Card>
+    ))}
+  </div>
+
+  <section class="mt-6">
+    <Card>
+      <CardHeader>
+        <CardTitle>Why there are no deforestation or glacier stories yet</CardTitle>
+        <CardDescription>The gap is a missing backfill, not a missing method.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm text-[var(--color-muted)]">
+        <p>
+          Three of the seven marts depend on Copernicus Sentinel data collected through Google
+          Earth Engine: the deforestation index, the glacier backscatter trend, and the
+          per-hexagon vegetation change layer. The collectors are written and tested; the
+          backfill has not run because Earth Engine needs a service account that is not yet
+          configured.
+        </p>
+        <p>
+          Rather than hide this, the
+          <a href="/catalog" class="text-[var(--color-accent)] underline decoration-dotted">catalog</a>
+          marks each table as present or awaiting backfill, and
+          <a href="/ops" class="text-[var(--color-accent)] underline decoration-dotted">ops</a>
+          shows the freshness of everything that is live.
+        </p>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>

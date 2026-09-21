@@ -1,0 +1,67 @@
+---
+import { categoryTicks, linePath, linearScale, type Point } from "@/lib/svg-chart";
+import type { IceRow } from "@/lib/queries";
+
+/** Sea-ice extent against the published normal. The gap between the lines is the finding;
+ *  a table of z-scores cannot convey a sustained deficit the way two diverging lines do. */
+interface Props {
+  rows: IceRow[];
+  region: string;
+}
+
+const { rows, region } = Astro.props;
+const data = rows
+  .filter((row) => row.region_id === region)
+  .map((row) => ({
+    date: String(row.period_start).slice(0, 10),
+    extent: row.value,
+    normal: row.baseline_mean,
+    z: row.zscore,
+  }));
+
+const WIDTH = 400;
+const HEIGHT = 190;
+const TOP = 12;
+const BOTTOM = 22;
+const LEFT = 40;
+const plotWidth = WIDTH - LEFT - 8;
+const plotHeight = HEIGHT - TOP - BOTTOM;
+
+const all = [...data.map((d) => d.extent), ...data.map((d) => d.normal ?? d.extent)];
+const lo = Math.min(...all);
+const hi = Math.max(...all);
+const pad = Math.max((hi - lo) * 0.1, 0.2);
+const y = linearScale([lo - pad, hi + pad], [TOP + plotHeight, TOP]);
+const x = linearScale([0, Math.max(data.length - 1, 1)], [LEFT, LEFT + plotWidth]);
+
+const observed: Point[] = data.map((d, i) => ({ x: x(i), y: y(d.extent) }));
+const normal: Point[] = data.filter((d) => d.normal !== null).map((d) => ({ x: x(data.indexOf(d)), y: y(d.normal as number) }));
+const ticks = [lo, (lo + hi) / 2, hi];
+const xTicks = categoryTicks(data.length, plotWidth, 4);
+---
+
+<div class="px-2 pt-2">
+  <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label={`Sea-ice extent versus the 1981-2010 normal for ${region}`}>
+    {ticks.map((tick) => (
+      <g>
+        <line x1={LEFT} x2={LEFT + plotWidth} y1={y(tick)} y2={y(tick)} stroke="var(--color-border)" stroke-dasharray="3 3"></line>
+        <text x={LEFT - 5} y={y(tick) + 3.5} text-anchor="end" font-size="9" fill="var(--color-subtle)">{tick.toFixed(1)}</text>
+      </g>
+    ))}
+    <path d={linePath(normal)} fill="none" stroke="var(--color-subtle)" stroke-width="1.2" stroke-dasharray="4 3"></path>
+    <path d={linePath(observed)} fill="none" stroke="var(--color-accent)" stroke-width="1.8"></path>
+    {data.map((d, i) => (
+      <circle cx={x(i)} cy={y(d.extent)} r="6" fill="transparent">
+        <title>{`${d.date}: ${d.extent.toFixed(2)} × 10⁶ km²${d.normal === null ? "" : ` (normal ${d.normal.toFixed(2)}, z=${d.z === null ? "—" : Number(d.z).toFixed(2)})`}`}</title>
+      </circle>
+    ))}
+    {xTicks.map((tick) => (
+      <text x={LEFT + tick.x} y={HEIGHT - 6} text-anchor="middle" font-size="9" fill="var(--color-subtle)">
+        {data[tick.label]?.date.slice(5)}
+      </text>
+    ))}
+  </svg>
+</div>
+<p class="px-4 pb-3 text-xs text-[var(--color-muted)]">
+  Solid: observed. Dashed: 1981–2010 normal. The vertical gap is the deficit.
+</p>

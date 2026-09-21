@@ -1,0 +1,181 @@
+---
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, Td, Th } from "@/components/ui/table";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+
+const PIPELINE = [
+  { stage: "Collect", where: "GitHub Actions (cron)", what: "Python collectors pull FIRMS, Sentinel and NOAA/NSIDC. Exponential backoff, a per-source circuit breaker, Pandera validation at ingress and egress, H3 indexing, and partitioned writes are inherited from one base class." },
+  { stage: "Store", where: "Hugging Face Hub datasets", what: "Bronze parquet, git-backed, so every landing is versioned and attributable to a commit. Partitioned by source, region and period; the one-time historical pull lives under backfill/." },
+  { stage: "Transform", where: "dbt + DuckDB", what: "staging → intermediate → gold. The lake is mirrored locally first, because DuckDB re-lists a remote repo tree on every query and that exhausts the Hub's API quota." },
+  { stage: "Train", where: "GitHub Actions", what: "Isolation Forest on strictly causal features, tracked in MLflow with the exact dataset commit hash, published to a Hugging Face model repo with a generated model card." },
+  { stage: "Score", where: "GitHub Actions", what: "Batch scoring applies the registered model to the latest gold features and upserts percentiles into the serving database. Nothing infers on the request path." },
+  { stage: "Serve", where: "Cloudflare Pages", what: "Astro API routes run as Pages Functions and read Turso over its HTTP protocol, which is what makes an edge runtime workable without a proxy service." },
+];
+
+const DECISIONS = [
+  { choice: "DuckDB, not Spark", why: "Two years of three sources is ~10⁵–10⁶ numeric rows. A cluster adds cost and operational surface for no capability, and DuckDB reads the lake over HTTP with no staging step." },
+  { choice: "H3 hexagons, not raw lat/lon", why: "Grouping becomes string equality rather than a spatial join, resolutions nest for free, and proximity is a cheap k-ring. Resolution is chosen per source rather than uniformly." },
+  { choice: "Median/MAD, not mean/stddev", why: "A large fire sits inside its own ±15-day baseline window and would inflate the yardstick it is measured against — partly hiding itself. Measured: z 7.2 with mean/stddev versus 16.9 with median/MAD for the same event." },
+  { choice: "One mart per source arm", why: "A dbt union requires every input to exist, so a combined ice mart meant a missing Sentinel source also removed the sea-ice results. Splitting them means an outage removes only its own table." },
+  { choice: "Mirror the lake before transforming", why: "DuckDB's hf:// filesystem re-lists the repo tree on every query. A build made dozens of API calls against a 1,000-per-5-minutes quota; after mirroring it makes none and runs in seconds." },
+  { choice: "Percentile scores, not raw model output", why: "Isolation Forest scores are unbounded and only comparable within one fitted model. A percentile ranked against the training distribution means the same thing after a retrain." },
+  { choice: "Two SQL dialects, kept apart", why: "dbt runs on DuckDB; the serving database is SQLite. month(), date_trunc(), dayofyear() and the quantile family are DuckDB-only and fail at runtime, not at review — `month()` broke the analysis page. Serving SQL uses strftime, and every console example and story query is executed against the real database rather than eyeballed." },
+];
+
+const LIMITATIONS = [
+  "No labelled anomalies exist, so nothing here reports precision or recall against truth. Evaluation is distributional, comparative, and anchored on documented real events.",
+  "Two regions and two years for fire. That is a baseline, not a production dataset; adding regions or years feeds the same code unchanged.",
+  "At the serving threshold the Isolation Forest's flagged slice is identical to the statistical rule's (37 of 37 days, Jaccard 1.0). The top 2.5% of days are ~20× the rest, so they are trivially separable. The model adds no information over the rule on this data, and its model card says so.",
+  "Detection counts are not burned area. One fire produces many detections across overpasses; cloud, smoke and satellite geometry all affect what is seen.",
+  "MODIS mean FRP is ~100 MW where VIIRS is ~15 MW for the same fires. Intensity features pool both, so they carry an instrument-mix confound.",
+  "Sea-ice extent is persistently anomalous rather than episodically so: the boolean flag lights up on most days in the window and should be read as uninformative, with the z-score series used instead.",
+  "Agricultural burning is indistinguishable from wildfire in thermal-anomaly data. Out-of-season detections are real anomalies; their cause is not established.",
+];
+---
+
+<Layout title="TerraSentinel — docs" description="Method, architecture, decisions and limitations.">
+  <section class="mb-5 max-w-3xl">
+    <h2 class="text-xl font-semibold tracking-tight">How this works, and what it cannot tell you</h2>
+    <p class="mt-2 text-sm text-[var(--color-muted)]">
+      An unsupervised anomaly-detection pipeline over free satellite and sensor data, running
+      entirely on free tiers. GitHub Actions does the compute, Hugging Face Hub stores the lake and
+      the model registry, Turso serves the gold tables, Cloudflare Pages serves this dashboard.
+    </p>
+  </section>
+
+  <section class="mb-5">
+    <Card>
+      <CardHeader>
+        <CardTitle>Pipeline</CardTitle>
+        <CardDescription>Each stage validates its own inputs and outputs, and fails loudly rather than passing bad data on.</CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead><tr><Th>Stage</Th><Th>Where it runs</Th><Th>What happens</Th></tr></thead>
+          <tbody>
+            {PIPELINE.map((row) => (
+              <tr>
+                <Td className="whitespace-nowrap font-medium">{row.stage}</Td>
+                <Td className="whitespace-nowrap text-[var(--color-muted)]">{row.where}</Td>
+                <Td className="min-w-[28rem] align-top text-[var(--color-muted)]">{row.what}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </CardContent>
+    </Card>
+  </section>
+
+  <section class="mb-5 grid gap-5 lg:grid-cols-2">
+    <Card>
+      <CardHeader>
+        <CardTitle>Anomaly definitions</CardTitle>
+        <CardDescription>Stated explicitly, because "anomaly" is the whole product.</CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead><tr><Th>Signal</Th><Th>Compared against</Th></tr></thead>
+          <tbody>
+            <tr><Td>Daily fire count</Td><Td>Median of the same ±15 days across years; scaled MAD as the yardstick</Td></tr>
+            <tr><Td>Monthly NDVI</Td><Td>The same month a year earlier, z-scored against that region's own change distribution</Td></tr>
+            <tr><Td>Sea-ice extent</Td><Td>The published NSIDC 1981–2010 per-day normal and its standard deviation</Td></tr>
+            <tr><Td>Glacier backscatter</Td><Td>Year-over-year change distribution — no climatology exists, and `baseline_source` says so</Td></tr>
+          </tbody>
+        </Table>
+      </CardContent>
+      <CardContent className="pt-0 text-xs text-[var(--color-muted)]">
+        Fire uses a ±15-day pooled window rather than "same date last year" because with two years
+        of history a same-date baseline has a sample size of two.
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>Decisions worth explaining</CardTitle>
+        <CardDescription>The non-obvious choices, and the measurement that forced each.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {DECISIONS.map((item) => (
+          <div>
+            <p class="font-medium">{item.choice}</p>
+            <p class="text-[var(--color-muted)]">{item.why}</p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  </section>
+
+  <section class="mb-5">
+    <Card>
+      <CardHeader>
+        <CardTitle>Limitations</CardTitle>
+        <CardDescription>Every one of these is measured, and several are recorded in the model card itself.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul class="space-y-2 text-sm text-[var(--color-muted)]">
+          {LIMITATIONS.map((item) => <li class="flex gap-2"><span class="text-[var(--color-accent)]">—</span><span>{item}</span></li>)}
+        </ul>
+      </CardContent>
+    </Card>
+  </section>
+
+  <section class="grid gap-5 lg:grid-cols-2">
+    <Card>
+      <CardHeader>
+        <CardTitle>Validation</CardTitle>
+        <CardDescription>How an unlabelled pipeline is shown to work.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm text-[var(--color-muted)]">
+        <p>
+          <strong class="text-[var(--color-foreground)]">Synthetic injection.</strong> The test lake
+          has one grossly obvious event planted per anomaly type. CI asserts each is flagged
+          <em>and</em> that the overall flag rate stays under a ceiling — a degenerate baseline that
+          flags everything would pass a sensitivity check on its own.
+        </p>
+        <p>
+          <strong class="text-[var(--color-foreground)]">Documented events.</strong> Six real events
+          with measured signatures, including four that must be caught (the August 2025 Iberian
+          megafire cluster, the Greek episode, the February 2026 winter anomaly, an early-July 2026
+          surge) and a negative control that must stay unflagged. Two are caught by rank rather than
+          by the serving threshold, which is reported rather than hidden.
+        </p>
+        <p>
+          <strong class="text-[var(--color-foreground)]">Schema and freshness tests.</strong> Every
+          gold model carries not-null, range and composite-key tests, plus a per-source recency
+          check with a budget appropriate to its cadence.
+        </p>
+        <p>
+          <strong class="text-[var(--color-foreground)]">Query verification.</strong> The console's
+          preloaded examples and every story query are executed against the live database in CI
+          development. A preloaded example that errors teaches a reader that the console is broken,
+          and a dialect difference is invisible until executed.
+        </p>
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>Reproducing it</CardTitle>
+        <CardDescription>The pipeline runs without credentials except where an upstream source requires one.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm text-[var(--color-muted)]">
+        <p>Generate a synthetic lake, build the marts, train, and validate — all offline:</p>
+        <pre class="overflow-x-auto rounded border border-[var(--color-border)] bg-[var(--color-background)] p-3 font-mono text-[11px] leading-relaxed">python -m tools.synthetic_bronze --out data/bronze --clean --inject-anomaly
+python -m tools.bronze_manifest --local-root data/bronze --root data/bronze \
+  --out transform/target/bronze_globs.json
+dbt build --project-dir transform --profiles-dir transform \
+  --vars '&#123;"bronze_root": "data/bronze"&#125;'
+python -m tools.assert_anomalies_detected --duckdb-path transform/terrasentinel.duckdb
+python -m ml.train.train_isolation_forest --duckdb-path transform/terrasentinel.duckdb \
+  --out-dir ml/artifacts/ci --dataset-commit ci-local</pre>
+        <p class="text-xs">
+          Real runs need <code class="font-mono">FIRMS_MAP_KEY</code>,
+          <code class="font-mono">HF_TOKEN</code>, a Google Earth Engine service account for
+          Sentinel, and Turso credentials. All are read from the environment; none are committed.
+        </p>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>

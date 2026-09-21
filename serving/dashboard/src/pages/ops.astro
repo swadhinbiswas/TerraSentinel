@@ -1,0 +1,148 @@
+---
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Stat } from "@/components/ui/stat";
+import { Table, Td, Th } from "@/components/ui/table";
+import { opsReport } from "@/lib/queries";
+import { turso } from "@/lib/turso";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+
+const env = Astro.locals.runtime?.env ?? import.meta.env;
+const report = await opsReport(turso(env));
+
+const fmt = (value: number | null | undefined, digits = 1) =>
+  value === null || value === undefined ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
+
+// Freshness budgets per domain. A fire source is late after a few days; a monthly
+// composite is not late until well over a month. One threshold for everything would
+// either cry wolf on the monthly sources or hide a dead fire feed.
+const BUDGET_DAYS: Record<string, number> = {
+  gold_fire_anomalies: 3,
+  gold_h3_fire: 3,
+  gold_ice_extent_trends: 10,
+  gold_h3_sst: 45,
+  gold_deforestation_index: 45,
+  gold_glacier_backscatter: 45,
+  gold_h3_sentinel: 45,
+  ml_predictions: 10,
+};
+
+const statusTone = (status: string) =>
+  status === "success" ? "moderate" : status === "partial" ? "high" : "extreme";
+---
+
+<Layout title="TerraSentinel — operations" description="Workflow runs, data freshness and model version.">
+  <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <Stat label="Tables live" value={report.pageSize.tables} />
+    <Stat label="Rows served" value={report.pageSize.rows.toLocaleString()} />
+    <Stat label="Runs recorded" value={report.runs.length} hint="most recent 25 shown" />
+    {/* `mono` rather than a nested <span>: nesting an element in a JSX expression puts
+        Astro's compiler and its type checker at odds about `class` vs `className`. */}
+    <Stat
+      label="Model"
+      value={report.model.version ?? "not scored yet"}
+      hint={`${report.model.predictions?.toLocaleString() ?? "—"} predictions`}
+      mono
+    />
+  </section>
+
+  <section class="mb-5">
+    <Card>
+      <CardHeader>
+        <CardTitle>Data freshness</CardTitle>
+        <CardDescription>
+          Days since the newest observation, against a per-domain budget. Fire is late after a few
+          days; a monthly composite is not late until well over a month.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead><tr><Th>Table</Th><Th>Newest observation</Th><Th>Days behind</Th><Th>Budget</Th><Th>State</Th></tr></thead>
+          <tbody>
+            {report.freshness.map((row) => {
+              const budget = BUDGET_DAYS[row.name] ?? 30;
+              const state = !row.present
+                ? "awaiting backfill"
+                : row.daysBehind === null
+                  ? "unknown"
+                  : row.daysBehind > budget
+                    ? "stale"
+                    : "fresh";
+              return (
+                <tr>
+                  <Td className="font-mono">{row.name}</Td>
+                  <Td>{row.lastValue ?? "—"}</Td>
+                  <Td>{row.daysBehind ?? "—"}</Td>
+                  <Td>{budget}d</Td>
+                  <Td>
+                    <Badge tone={state === "fresh" ? "moderate" : state === "stale" ? "extreme" : "muted"}>
+                      {state}
+                    </Badge>
+                  </Td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </Table>
+      </CardContent>
+    </Card>
+  </section>
+
+  <section>
+    <Card>
+      <CardHeader>
+        <CardTitle>Workflow runs</CardTitle>
+        <CardDescription>
+          Written by every workflow on completion, including failures. This is what makes a silent
+          breakage visible: a run that stopped happening leaves a gap in this table.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead><tr><Th>Workflow</Th><Th>Status</Th><Th>Started</Th><Th>Duration</Th><Th>Rows</Th><Th>Failed units</Th></tr></thead>
+          <tbody>
+            {report.runs.length === 0 && (
+              <tr><Td colSpan={6} className="text-[var(--color-muted)]">No runs recorded yet.</Td></tr>
+            )}
+            {report.runs.map((run) => (
+              <tr>
+                <Td className="font-mono">{run.workflow}</Td>
+                <Td><Badge tone={statusTone(run.status) as never}>{run.status}</Badge></Td>
+                <Td>{String(run.started_at).slice(0, 19).replace("T", " ")}</Td>
+                <Td>{run.duration_s === null ? "—" : `${fmt(run.duration_s)} s`}</Td>
+                <Td>{run.rows_written.toLocaleString()}</Td>
+                <Td>{run.failed_units}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </CardContent>
+      <CardContent className="pt-0 text-xs text-[var(--color-muted)]">
+        {report.runsByStatus.length > 0 && (
+          <p>
+            All recorded runs by status:{" "}
+            {report.runsByStatus.map((row) => `${row.status} ${row.n}`).join(" · ")}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  </section>
+
+  <section class="mt-5">
+    <Card>
+      <CardHeader>
+        <CardTitle>Machine-readable</CardTitle>
+        <CardDescription>For uptime checks and badging.</CardDescription>
+      </CardHeader>
+      <CardContent className="text-sm">
+        <a href="/api/health" class="text-[var(--color-accent)] underline decoration-dotted">/api/health</a>
+        <span class="ml-2 text-[var(--color-muted)]">
+          returns 200 with per-table counts, recent runs and model version; 503 if the database is
+          unreachable or the fire mart is missing.
+        </span>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>

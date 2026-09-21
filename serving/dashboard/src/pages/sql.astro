@@ -1,0 +1,53 @@
+---
+import SqlConsole from "@/components/SqlConsole";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+---
+
+<Layout title="TerraSentinel — SQL console" description="Guarded read-only SQL over the serving database.">
+  <section class="mb-4 max-w-3xl">
+    <h2 class="text-xl font-semibold tracking-tight">SQL console</h2>
+    <p class="mt-2 text-sm text-[var(--color-muted)]">
+      A real SQL console against the same database the dashboard reads. The guard is
+      server-side and refuses rather than sanitises: one statement, SELECT or WITH only, no
+      comments, and a row cap applied when the query does not limit itself. Several worked
+      examples are preloaded, including the ones behind the
+      <a href="/stories" class="text-[var(--color-accent)] underline decoration-dotted">stories</a>.
+    </p>
+  </section>
+
+  <Card>
+    <CardHeader>
+      <CardTitle>Query</CardTitle>
+      <CardDescription>SQLite dialect. Reads only — the pipeline writes, this does not.</CardDescription>
+    </CardHeader>
+    <CardContent>
+      <SqlConsole client:only="react" />
+    </CardContent>
+  </Card>
+
+  <section class="mt-5">
+    <Card>
+      <CardHeader>
+        <CardTitle>What the guard does and does not protect</CardTitle>
+        <CardDescription>Stated plainly, because a console that implies safety it lacks is worse than none.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm text-[var(--color-muted)]">
+        <p>
+          <strong class="text-[var(--color-foreground)]">Protected:</strong> multi-statement
+          scripts, comment-hidden statements, and every mutating or schema keyword (INSERT,
+          UPDATE, DELETE, DROP, ALTER, CREATE, ATTACH, PRAGMA, and others outside SELECT/WITH).
+        </p>
+        <p>
+          <strong class="text-[var(--color-foreground)]">Not protected:</strong> the database
+          credential in use also has write scope, so a bug in the guard would have write
+          consequences. The banner above the editor reports the token's scope from its JWT. The
+          stronger control is issuing a read-only Turso token for this route and setting it here;
+          until then the guard is the only control.
+        </p>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>

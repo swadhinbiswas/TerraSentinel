@@ -1,0 +1,72 @@
+---
+import { bars } from "@/lib/svg-chart";
+
+/** Mean detections per month, rendered server-side. Months that produced a flagged day
+ *  are highlighted, which is what makes an out-of-season anomaly visible against the
+ *  seasonal curve. */
+interface Props {
+  data: { month: number; mean: number; flagged: number }[];
+  label: string;
+}
+
+const { data, label } = Astro.props;
+const MONTHS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+
+const WIDTH = 400;
+const HEIGHT = 190;
+const TOP = 10;
+const BOTTOM = 22;
+const LEFT = 40;
+const plotWidth = WIDTH - LEFT - 8;
+const plotHeight = HEIGHT - TOP - BOTTOM;
+
+const geometry = bars(
+  data.map((d) => d.mean),
+  plotWidth,
+  plotHeight,
+);
+const max = Math.max(...data.map((d) => d.mean), 1);
+---
+
+<div class="px-2 pb-1 pt-2">
+  <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label={`Mean daily detections by month, ${label}`}>
+    {[0, 0.5, 1].map((fraction) => {
+      const value = max * fraction;
+      const yPos = TOP + plotHeight - fraction * plotHeight;
+      return (
+        <g>
+          <line x1={LEFT} x2={LEFT + plotWidth} y1={yPos} y2={yPos} stroke="var(--color-border)" stroke-dasharray={fraction === 0 ? "0" : "3 3"}></line>
+          <text x={LEFT - 5} y={yPos + 3.5} text-anchor="end" font-size="9" fill="var(--color-subtle)">
+            {value >= 1000 ? `${(value / 1000).toFixed(0)}k` : Math.round(value)}
+          </text>
+        </g>
+      );
+    })}
+    {data.map((row, index) => {
+      const bar = geometry[index];
+      if (!bar) return null;
+      const highlighted = row.flagged > 0;
+      return (
+        <rect
+          x={LEFT + bar.x}
+          y={TOP + bar.y}
+          width={bar.width}
+          height={bar.height}
+          rx="2"
+          fill={highlighted ? "var(--color-i4)" : "var(--color-i1)"}
+        >
+          <title>{`${MONTHS[row.month - 1]}: ${row.mean.toFixed(1)} mean detections/day${row.flagged ? `, ${row.flagged} flagged day(s)` : ""}`}</title>
+        </rect>
+      );
+    })}
+    {data.map((row, index) => {
+      const bar = geometry[index];
+      if (!bar) return null;
+      return (
+        <text x={LEFT + bar.x + bar.width / 2} y={HEIGHT - 6} text-anchor="middle" font-size="9" fill="var(--color-subtle)">
+          {MONTHS[row.month - 1]}
+        </text>
+      );
+    })}
+  </svg>
+</div>

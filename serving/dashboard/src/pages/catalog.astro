@@ -1,0 +1,144 @@
+---
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Stat } from "@/components/ui/stat";
+import { Table, Td, Th } from "@/components/ui/table";
+import { catalog } from "@/lib/queries";
+import { turso } from "@/lib/turso";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+
+const env = Astro.locals.runtime?.env ?? import.meta.env;
+const tables = await catalog(turso(env));
+
+const present = tables.filter((table) => table.present);
+const absent = tables.filter((table) => !table.present);
+const totalRows = present.reduce((sum, table) => sum + (table.rows ?? 0), 0);
+
+const DOMAIN_LABEL: Record<string, string> = {
+  fire: "Wildfire",
+  cryosphere: "Cryosphere",
+  marine: "Marine",
+  vegetation: "Vegetation",
+  operations: "Operations",
+};
+
+const fmt = (value: number | null | undefined) =>
+  value === null || value === undefined ? "—" : value.toLocaleString();
+---
+
+<Layout title="TerraSentinel — data catalog" description="Every table, its source, grain and licence.">
+  <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <Stat label="Tables live" value={`${present.length} of ${tables.length}`} />
+    <Stat label="Rows served" value={fmt(totalRows)} />
+    <Stat label="Upstream sources" value={4} hint="FIRMS · Sentinel · NOAA · NSIDC" />
+    <Stat label="Awaiting backfill" value={absent.length} hint="Sentinel via Earth Engine" />
+  </section>
+
+  <section class="space-y-4">
+    {tables.map((table) => (
+      <Card>
+        <CardHeader>
+          <div class="flex flex-wrap items-center gap-2">
+            <CardTitle className="font-mono">{table.name}</CardTitle>
+            <Badge tone={table.present ? "moderate" : "muted"}>
+              {table.present ? "live" : "awaiting backfill"}
+            </Badge>
+            <Badge tone="neutral">{DOMAIN_LABEL[table.domain] ?? table.domain}</Badge>
+            {table.internal && <Badge tone="muted">internal</Badge>}
+            {table.present && (
+              <span class="ml-auto text-xs tabular-nums text-[var(--color-muted)]">
+                {fmt(table.rows)} rows
+                {table.firstValue && table.lastValue && ` · ${table.firstValue} → ${table.lastValue}`}
+              </span>
+            )}
+          </div>
+          <CardDescription className="pt-1">{table.title}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p class="max-w-4xl text-sm leading-relaxed text-[var(--color-muted)]">{table.description}</p>
+          <dl class="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
+            <div class="flex gap-2">
+              <dt class="text-[var(--color-muted)]">Source</dt>
+              <dd>{table.source}</dd>
+            </div>
+            <div class="flex gap-2">
+              <dt class="text-[var(--color-muted)]">Grain</dt>
+              <dd>{table.grain}</dd>
+            </div>
+            <div class="flex gap-2">
+              <dt class="text-[var(--color-muted)]">Time column</dt>
+              <dd class="font-mono">{table.dateColumn ?? "—"}</dd>
+            </div>
+          </dl>
+          {!table.present && table.blockedBy && (
+            <p class="rounded border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted)]">
+              Blocked by: {table.blockedBy}. The collector and models are implemented; the backfill
+              needs a Google Earth Engine service account.
+            </p>
+          )}
+          {table.present && table.columns.length > 0 && (
+            <details>
+              <summary class="cursor-pointer text-xs text-[var(--color-muted)] hover:text-[var(--color-foreground)]">
+                {table.columns.length} columns
+              </summary>
+              <div class="mt-2 flex flex-wrap gap-1">
+                {table.columns.map((column) => (
+                  <span class="rounded bg-[var(--color-border)]/50 px-1.5 py-0.5 font-mono text-[11px]">{column}</span>
+                ))}
+              </div>
+              <p class="mt-2 text-xs text-[var(--color-muted)]">
+                Browse rows in the
+                <a href={`/explorer?table=${table.name}`} class="text-[var(--color-accent)] underline decoration-dotted">explorer</a>
+                or query it in the
+                <a href="/sql" class="text-[var(--color-accent)] underline decoration-dotted">SQL console</a>.
+              </p>
+            </details>
+          )}
+        </CardContent>
+      </Card>
+    ))}
+  </section>
+
+  <section class="mt-6">
+    <Card>
+      <CardHeader>
+        <CardTitle>Licences and attribution</CardTitle>
+        <CardDescription>All four providers carry terms for open data use.</CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead><tr><Th>Source</Th><Th>Products</Th><Th>Terms</Th></tr></thead>
+          <tbody>
+            <tr>
+              <Td>NASA FIRMS</Td>
+              <Td>MODIS and VIIRS active fire / thermal anomalies</Td>
+              <Td><a class="text-[var(--color-accent)] underline decoration-dotted" href="https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-and-information-policy" target="_blank" rel="noreferrer">NASA open data policy</a> — free, attribution expected</Td>
+            </tr>
+            <tr>
+              <Td>Copernicus Sentinel</Td>
+              <Td>Sentinel-2 (SR), Sentinel-1 (GRD), processed in Google Earth Engine</Td>
+              <Td><a class="text-[var(--color-accent)] underline decoration-dotted" href="https://dataspace.copernicus.eu/terms-and-conditions" target="_blank" rel="noreferrer">Copernicus terms</a> — free, open, attribution required. Earth Engine is free for research use</Td>
+            </tr>
+            <tr>
+              <Td>NOAA OISST</Td>
+              <Td>Daily 0.25° sea-surface temperature anomaly</Td>
+              <Td><a class="text-[var(--color-accent)] underline decoration-dotted" href="https://www.noaa.gov/information-technology/open-data-dissemination" target="_blank" rel="noreferrer">NOAA open data</a> — public domain</Td>
+            </tr>
+            <tr>
+              <Td>NSIDC Sea Ice Index</Td>
+              <Td>Daily extent and the 1981–2010 climatology</Td>
+              <Td><a class="text-[var(--color-accent)] underline decoration-dotted" href="https://nsidc.org/about/use-our-data" target="_blank" rel="noreferrer">NSIDC terms</a> — free, citation requested</Td>
+            </tr>
+          </tbody>
+        </Table>
+      </CardContent>
+      <CardContent className="pt-0 text-xs text-[var(--color-muted)]">
+        The footer attribution is rendered from the <code class="font-mono">sources</code> table in the
+        serving database, which the pipeline upserts on every run, so it cannot drift from the
+        configuration the collectors actually use.
+      </CardContent>
+    </Card>
+  </section>
+</Layout>

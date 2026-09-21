@@ -1,0 +1,111 @@
+---
+import ThemeToggle from "@/components/ui/theme-toggle";
+import "@/styles/global.css";
+
+interface Props {
+  title: string;
+  description: string;
+  /** Resolved from the current path so the nav can mark the active page. */
+  active?: string;
+}
+
+const { title, description } = Astro.props;
+const path = Astro.url.pathname;
+const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
+
+const NAV = [
+  { href: "/", label: "Overview" },
+  { href: "/analysis", label: "Analysis" },
+  { href: "/stories", label: "Stories" },
+  { href: "/catalog", label: "Catalog" },
+  { href: "/explorer", label: "Explorer" },
+  { href: "/sql", label: "SQL" },
+  { href: "/ops", label: "Ops" },
+  { href: "/docs", label: "Docs" },
+];
+
+// Attribution is a licence requirement for all three providers, so it lives in the
+// layout rather than in each page where it could be forgotten.
+const ATTRIBUTION = [
+  { text: "NASA FIRMS", detail: "MODIS and VIIRS active fire products", href: "https://firms.modaps.eosdis.nasa.gov/" },
+  { text: "Copernicus Sentinel", detail: "ESA, processed in Google Earth Engine", href: "https://dataspace.copernicus.eu/" },
+  { text: "NOAA / NSIDC", detail: "OISST v2.1 and Sea Ice Index v4.0", href: "https://nsidc.org/data/g02135" },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script is:inline>
+      // Set before first paint: reading the preference in an island would flash the
+      // default theme on every reload.
+      try {
+        const stored = localStorage.getItem("terrasentinel-theme");
+        document.documentElement.dataset.theme = stored === "light" ? "light" : "dark";
+      } catch {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
+  </head>
+  <body class="min-h-screen antialiased">
+    <div class="mx-auto flex min-h-screen max-w-7xl flex-col">
+      <header class="border-b border-[var(--color-border)] px-4 pt-4">
+        <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <a href="/" class="text-lg font-semibold tracking-tight hover:text-[var(--color-accent)]">TerraSentinel</a>
+          <p class="text-xs text-[var(--color-muted)]">
+            Satellite anomaly detection over EU study regions — wildfire, deforestation, cryosphere
+          </p>
+        </div>
+        <div class="mt-3 flex items-center gap-2">
+          <nav class="flex flex-1 flex-wrap gap-x-1 gap-y-1 text-sm">
+          {NAV.map((item) => (
+            <a
+              href={item.href}
+              class:list={[
+                "rounded-t border-b-2 px-3 py-2 transition-colors",
+                isActive(item.href)
+                  ? "border-[var(--color-accent)] text-[var(--color-foreground)]"
+                  : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-foreground)]",
+              ]}
+            >
+              {item.label}
+            </a>
+            ))}
+          </nav>
+          <ThemeToggle client:only="react" />
+        </div>
+      </header>
+
+      <main class="flex-1 px-4 py-5">
+        <slot />
+      </main>
+
+      <footer class="border-t border-[var(--color-border)] px-4 py-4 text-xs text-[var(--color-muted)]">
+        <p class="mb-1 font-medium text-[var(--color-foreground)]">Data attribution</p>
+        <ul class="flex flex-wrap gap-x-4 gap-y-1">
+          {ATTRIBUTION.map((item) => (
+            <li>
+              <a href={item.href} class="underline decoration-dotted hover:text-[var(--color-foreground)]" target="_blank" rel="noreferrer">
+                {item.text}
+              </a>
+              <span class="ml-1">{item.detail}</span>
+            </li>
+          ))}
+        </ul>
+        <p class="mt-2">
+          Anomaly scores are statistical comparisons against each region's own seasonal baseline,
+          or against the published NSIDC 1981–2010 normal. They are not official hazard warnings.
+        </p>
+        <p class="mt-1">
+          Data is refreshed by scheduled GitHub Actions workflows; every figure on this site is a
+          query against the serving database rather than a cached copy.
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,225 @@
+---
+import AnomalyMap from "@/components/AnomalyMap";
+import FireTrend from "@/components/charts/FireTrend.astro";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Stat } from "@/components/ui/stat";
+import { Table, Td, Th } from "@/components/ui/table";
+import { anomalies, iceTrends, mapWindow } from "@/lib/queries";
+import { tableStatus } from "@/lib/registry";
+import { turso } from "@/lib/turso";
+import Layout from "@/layouts/Layout.astro";
+
+// Server-rendered: the first paint carries real data and needs no client fetch, which is
+// the point of Astro here. Only the map and the chart are client-only islands.
+export const prerender = false;
+
+const env = Astro.locals.runtime?.env ?? import.meta.env;
+const client = turso(env);
+
+const [fireRows, iceRows, fireWindow, statuses] = await Promise.all([
+  anomalies(client, { sinceDays: 400 }),
+  iceTrends(client, { sinceDays: 400 }),
+  // A window anchored to the record's largest event, not to "recent": the anomalies are
+  // historical, so a last-N-days default shows the quiet tail and no signal.
+  mapWindow(client, { layer: "fire", from: "2025-08-13", to: "2025-08-19" }),
+  tableStatus(client),
+]);
+
+const exceptions = fireRows
+  .filter((row) => row.is_anomaly === 1)
+  .sort((a, b) => (b.zscore ?? 0) - (a.zscore ?? 0))
+  .slice(0, 10);
+
+const totalDetections = fireRows.reduce((sum, row) => sum + row.detection_count, 0);
+const scored = fireRows.filter((row) => row.zscore !== null).length;
+const flagged = fireRows.filter((row) => row.is_anomaly === 1).length;
+
+const arctic = iceRows.filter((row) => row.region_id === "arctic");
+const antarctic = iceRows.filter((row) => row.region_id === "antarctic");
+const latest = (rows: typeof iceRows) => rows.at(-1);
+
+const fmt = (value: number | null | undefined, digits = 1): string =>
+  value === null || value === undefined ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
+
+const stats = [
+  { label: "Detections in window", value: totalDetections.toLocaleString(), hint: "400 days, both regions" },
+  { label: "Days scored", value: scored.toLocaleString(), hint: "days with a usable baseline" },
+  { label: "Days flagged", value: `${flagged} (${scored ? ((flagged / scored) * 100).toFixed(1) : "0"}%)`, hint: "z ≥ 5" },
+  { label: "Cells in Aug 2025 event", value: fireWindow.cells.length.toLocaleString(), hint: "H3 res 7, peak week" },
+];
+
+// Coverage is shown up front. Three domains are absent for a known reason, and a
+// dashboard that silently omits them is indistinguishable from one that is broken.
+const coverage = statuses.filter((status) => !status.internal);
+const domains = ["fire", "cryosphere", "marine", "vegetation"] as const;
+const domainLabels: Record<string, string> = {
+  fire: "Wildfire",
+  cryosphere: "Cryosphere",
+  marine: "Marine",
+  vegetation: "Vegetation",
+};
+const domainCoverage = domains.map((domain) => {
+  const inDomain = coverage.filter((status) => status.domain === domain);
+  return {
+    domain,
+    label: domainLabels[domain] ?? domain,
+    present: inDomain.filter((status) => status.present).length,
+    total: inDomain.length,
+    live: inDomain.some((status) => status.present),
+  };
+});
+---
+
+<Layout title="TerraSentinel — overview" description="Live anomaly detection over EU study regions.">
+  <section class="mb-4">
+    <ul class="flex flex-wrap gap-2 text-xs">
+      {domainCoverage.map((item) => (
+        <li
+          class:list={[
+            "rounded-full border px-3 py-1",
+            item.live
+              ? "border-[var(--color-accent)]/60 text-[var(--color-foreground)]"
+              : "border-[var(--color-border)] text-[var(--color-muted)]",
+          ]}
+        >
+          {item.label}
+          <span class="ml-1 text-[var(--color-muted)]">
+            {item.present}/{item.total} table{item.total === 1 ? "" : "s"}
+          </span>
+          {!item.live && <span class="ml-1">· awaiting backfill</span>}
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    {stats.map((stat) => (
+      <Stat label={stat.label} value={stat.value} hint={stat.hint} />
+    ))}
+  </section>
+
+  <section class="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+    <Card className="overflow-hidden">
+      <CardHeader>
+        <CardTitle>Anomaly map</CardTitle>
+        <CardDescription>
+          Hexagons are real H3 cell boundaries. Colour scales with value; the legend states the
+          resolution, because a res-5 cell is ~253 km² and a res-7 cell is ~5 km².
+        </CardDescription>
+      </CardHeader>
+      <AnomalyMap client:only="react" initial={fireWindow} />
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>Daily fire detections</CardTitle>
+        <CardDescription>Iberia and Greece. Log axis by default — counts span four orders of magnitude.</CardDescription>
+      </CardHeader>
+      <FireTrend rows={fireRows} log={Astro.url.searchParams.get("scale") !== "linear"} />
+    </Card>
+  </section>
+
+  <section class="mt-5 grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+    <Card>
+      <CardHeader>
+        <CardTitle>Strongest departures</CardTitle>
+        <CardDescription>
+          z is the departure from the region's own ±15-day seasonal baseline, in robust units
+          (median and scaled MAD). The model percentile is shown where batch scoring has run.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead>
+            <tr>
+              <Th>Region</Th><Th>Date</Th><Th>Detections</Th><Th>z</Th><Th>Model pct</Th><Th>Severity</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {exceptions.length === 0 && (
+              <tr><Td colSpan={6} className="text-[var(--color-muted)]">No flagged days in this window.</Td></tr>
+            )}
+            {exceptions.map((row) => (
+              <tr>
+                <Td>{row.region_id}</Td>
+                <Td>{row.observation_date.slice(0, 10)}</Td>
+                <Td>{row.detection_count.toLocaleString()}</Td>
+                <Td>{fmt(row.zscore)}</Td>
+                <Td>{row.anomaly_percentile === null ? "—" : fmt(row.anomaly_percentile, 3)}</Td>
+                <Td><Badge tone={row.severity as never}>{row.severity}</Badge></Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>Sea-ice extent</CardTitle>
+        <CardDescription>
+          Latest value against the published NSIDC 1981–2010 per-day normal. The departure is
+          sustained rather than episodic, so read the z-score rather than the flag.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {[["Arctic", arctic], ["Antarctic", antarctic]].map(([label, rows]) => {
+          const row = latest(rows as typeof iceRows);
+          if (!row) return <p class="text-sm text-[var(--color-muted)]">{label as string}: no data</p>;
+          return (
+            <div class="flex items-baseline justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium">{label as string}</p>
+                <p class="text-xs text-[var(--color-muted)]">{String(row.period_start).slice(0, 10)}</p>
+              </div>
+              <div class="text-right">
+                <p class="tabular-nums">{fmt(row.value, 2)} × 10⁶ km²</p>
+                <p class="text-xs text-[var(--color-muted)]">normal {fmt(row.baseline_mean, 2)} · z {fmt(row.zscore, 2)}</p>
+              </div>
+              <Badge tone={row.severity as never}>{row.severity}</Badge>
+            </div>
+          );
+        })}
+        <a href="/analysis" class="block pt-1 text-xs text-[var(--color-accent)] underline decoration-dotted">
+          Full cryosphere analysis →
+        </a>
+      </CardContent>
+    </Card>
+  </section>
+
+  <section class="mt-5 grid gap-5 lg:grid-cols-3">
+    <Card>
+      <CardHeader>
+        <CardTitle>Read the data</CardTitle>
+        <CardDescription>Catalog, explorer and a query console.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1 text-sm">
+        <a href="/catalog" class="block text-[var(--color-accent)] underline decoration-dotted">Catalog — every table, source and licence</a>
+        <a href="/explorer" class="block text-[var(--color-accent)] underline decoration-dotted">Explorer — browse rows with filters</a>
+        <a href="/sql" class="block text-[var(--color-accent)] underline decoration-dotted">SQL — guarded read-only console</a>
+      </CardContent>
+    </Card>
+    <Card>
+      <CardHeader>
+        <CardTitle>Investigate</CardTitle>
+        <CardDescription>What the numbers describe, and where they disagree.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1 text-sm">
+        <a href="/stories" class="block text-[var(--color-accent)] underline decoration-dotted">Stories — four documented events</a>
+        <a href="/analysis" class="block text-[var(--color-accent)] underline decoration-dotted">Analysis — seasonal shape and feature separation</a>
+        <a href="/docs" class="block text-[var(--color-accent)] underline decoration-dotted">Docs — method, architecture, limitations</a>
+      </CardContent>
+    </Card>
+    <Card>
+      <CardHeader>
+        <CardTitle>Pipeline health</CardTitle>
+        <CardDescription>Run history, freshness and the active model.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1 text-sm">
+        <a href="/ops" class="block text-[var(--color-accent)] underline decoration-dotted">Ops — workflows, freshness, model version</a>
+        <a href="/api/health" class="block text-[var(--color-accent)] underline decoration-dotted">/api/health — machine-readable status</a>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>

@@ -1,0 +1,108 @@
+---
+import { areaPath, categoryTicks, linePath, linearScale, logScale, niceTicks, type Point } from "@/lib/svg-chart";
+import type { AnomalyRow } from "@/lib/queries";
+
+/**
+ * Daily fire detections, server-rendered as SVG.
+ *
+ * The y axis is logarithmic by default because counts span four orders of magnitude —
+ * on a linear axis every ordinary day is a flat line at zero and the seasonality, which
+ * is the thing worth seeing, disappears. The toggle is a link back to the same page with
+ * a query parameter, so the chart needs no JavaScript at all.
+ */
+interface Props {
+  rows: AnomalyRow[];
+  log?: boolean;
+  height?: number;
+}
+
+const { rows, log = true, height = 300 } = Astro.props;
+
+const WIDTH = 720;
+const TOP = 12;
+const BOTTOM = 28;
+const LEFT = 48;
+const RIGHT = 12;
+const plotWidth = WIDTH - LEFT - RIGHT;
+const plotHeight = height - TOP - BOTTOM;
+
+const data = rows.map((row) => ({
+  date: String(row.observation_date).slice(0, 10),
+  detections: row.detection_count,
+  zscore: row.zscore,
+  severity: row.severity,
+  flagged: row.is_anomaly === 1,
+}));
+
+const values = data.map((d) => d.detections);
+const domainMax = Math.max(...values, 1);
+const domainMin = log ? Math.max(1, Math.min(...values.filter((v) => v > 0), 1)) : 0;
+const y = log ? logScale([domainMin, domainMax], [TOP + plotHeight, TOP]) : linearScale([0, domainMax], [TOP + plotHeight, TOP]);
+const x = linearScale([0, Math.max(data.length - 1, 1)], [LEFT, LEFT + plotWidth]);
+
+const points: Point[] = data.map((d, i) => ({ x: x(i), y: y(d.detections) }));
+const line = linePath(points);
+const area = areaPath(points, TOP + plotHeight);
+const ticks = log
+  ? [1, 3, 10, 30, 100, 300, 1000, 3000, 10000].filter((t) => t >= domainMin && t <= domainMax)
+  : niceTicks([0, domainMax], 4);
+const flaggedPoints = data
+  .map((d, i) => ({ ...d, cx: x(i), cy: y(d.detections) }))
+  .filter((d) => d.flagged);
+const xTicks = categoryTicks(data.length, plotWidth, 6);
+
+const SEVERITY_FILL: Record<string, string> = {
+  extreme: "#f6e6a8",
+  high: "#ecba55",
+  moderate: "#e39a3f",
+};
+---
+
+<div class="px-2 pb-1 pt-2">
+  <svg
+    viewBox={`0 0 ${WIDTH} ${height}`}
+    width="100%"
+    height={height}
+    role="img"
+    aria-label={`Daily fire detections, ${data.length} days, ${flaggedPoints.length} flagged`}
+    class="overflow-visible"
+  >
+    <defs>
+      <linearGradient id="fireFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="var(--color-accent)" stop-opacity="0.5"></stop>
+        <stop offset="100%" stop-color="var(--color-accent)" stop-opacity="0.03"></stop>
+      </linearGradient>
+    </defs>
+
+    {ticks.map((tick) => (
+      <g>
+        <line x1={LEFT} x2={LEFT + plotWidth} y1={y(tick)} y2={y(tick)} stroke="var(--color-border)" stroke-dasharray="3 3"></line>
+        <text x={LEFT - 6} y={y(tick) + 3.5} text-anchor="end" font-size="10" fill="var(--color-subtle)">{tick.toLocaleString()}</text>
+      </g>
+    ))}
+
+    <path d={area} fill="url(#fireFill)"></path>
+    <path d={line} fill="none" stroke="var(--color-accent)" stroke-width="1.5"></path>
+
+    {flaggedPoints.map((point) => (
+      <circle cx={point.cx} cy={point.cy} r="3.5" fill={SEVERITY_FILL[point.severity] ?? "#ecba55"} stroke="var(--color-background)" stroke-width="1">
+        <title>{`${point.date}: ${point.detections.toLocaleString()} detections · ${point.severity}${point.zscore === null ? "" : ` (z=${Number(point.zscore).toFixed(1)})`}`}</title>
+      </circle>
+    ))}
+
+    {xTicks.map((tick) => (
+      <text x={LEFT + tick.x} y={height - 8} text-anchor="middle" font-size="10" fill="var(--color-subtle)">
+        {data[tick.label]?.date.slice(0, 7)}
+      </text>
+    ))}
+
+    <line x1={LEFT} x2={LEFT + plotWidth} y1={TOP + plotHeight} y2={TOP + plotHeight} stroke="var(--color-border)"></line>
+  </svg>
+</div>
+<p class="px-4 pb-3 text-xs text-[var(--color-muted)]">
+  {flaggedPoints.length} flagged day{flaggedPoints.length === 1 ? "" : "s"} marked.
+  {flaggedPoints.length > 0 && ` Strongest: ${flaggedPoints.reduce((best, row) => (Math.abs(row.zscore ?? 0) > Math.abs(best.zscore ?? 0) ? row : best)).date}.`}
+  <a href={log ? "?scale=linear" : "?scale=log"} class="ml-1 text-[var(--color-accent)] underline decoration-dotted">
+    {log ? "switch to linear scale" : "switch to log scale"}
+  </a>
+</p>

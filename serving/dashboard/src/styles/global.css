@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens.
+ *
+ * Two things here are deliberate rather than decorative:
+ *
+ * 1. **Semantic names.** `--color-surface` beats `--color-slate-800` because it can be
+ *    redefined per theme without touching a component.
+ *
+ * 2. **A colourblind-safe intensity ramp.** `--color-i1`..`--color-i5` vary mainly in
+ *    luminance, from a deep ember through orange to near-white. A sequential scale that
+ *    varies in hue alone (green→red) is invisible to the ~8% of men with red-green
+ *    deficiency, and red-green is exactly the obvious choice for a severity ramp. Every
+ *    value is also labelled in text, so colour is never the only channel.
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, "Liberation Mono", monospace;
+
+  /* dark (default) */
+  --color-background: oklch(0.145 0.008 265);
+  --color-surface: oklch(0.185 0.009 265);
+  --color-surface-raised: oklch(0.225 0.010 265);
+  --color-border: oklch(0.278 0.011 265);
+  --color-border-strong: oklch(0.36 0.013 265);
+  --color-muted: oklch(0.66 0.012 265);
+  --color-subtle: oklch(0.52 0.012 265);
+  --color-foreground: oklch(0.965 0.004 265);
+  --color-accent: oklch(0.74 0.14 52);
+  --color-accent-foreground: oklch(0.16 0.02 52);
+
+  /* intensity ramp, luminance-differentiated */
+  --color-i1: oklch(0.44 0.06 265);
+  --color-i2: oklch(0.62 0.11 55);
+  --color-i3: oklch(0.72 0.15 62);
+  --color-i4: oklch(0.80 0.17 78);
+  --color-i5: oklch(0.93 0.11 95);
+
+  --radius-card: 0.75rem;
+}
+
+[data-theme="light"] {
+  --color-background: oklch(0.985 0.002 265);
+  --color-surface: oklch(1 0 0);
+  --color-surface-raised: oklch(0.975 0.003 265);
+  --color-border: oklch(0.905 0.005 265);
+  --color-border-strong: oklch(0.84 0.007 265);
+  --color-muted: oklch(0.48 0.014 265);
+  --color-subtle: oklch(0.60 0.012 265);
+  --color-foreground: oklch(0.20 0.012 265);
+  --color-accent: oklch(0.56 0.16 45);
+  --color-accent-foreground: oklch(0.99 0 0);
+
+  --color-i1: oklch(0.82 0.03 265);
+  --color-i2: oklch(0.74 0.13 55);
+  --color-i3: oklch(0.66 0.16 52);
+  --color-i4: oklch(0.55 0.18 42);
+  --color-i5: oklch(0.42 0.17 28);
+}
+
+html {
+  color-scheme: dark;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+[data-theme="light"] html,
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tabular figures wherever numbers line up in columns or axes, so digits do not jump. */
+.tnum,
+table td,
+table th {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 35%, transparent);
+}
+
+/* Visible focus for keyboard users only, but never suppressed. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Respect a stated preference for less motion rather than animating regardless. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* maplibre's controls are light by default; keep them legible in both themes. */
+.maplibregl-ctrl-group {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--color-border) !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid var(--color-border) !important;
+}
+.maplibregl-ctrl-attrib {
+  background: color-mix(in oklab, var(--color-surface) 85%, transparent) !important;
+  color: var(--color-muted) !important;
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--color-muted) !important;
+}
+.maplibregl-popup-content {
+  background: var(--color-surface) !important;
+  color: var(--color-foreground) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-card) !important;
+  padding: 10px 12px !important;
+  font-size: 12px !important;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35) !important;
+}
+.maplibregl-popup-tip {
+  border-top-color: var(--color-surface) !important;
+  border-bottom-color: var(--color-surface) !important;
+}

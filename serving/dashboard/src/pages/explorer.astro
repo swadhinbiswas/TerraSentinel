@@ -1,0 +1,57 @@
+---
+import ExplorerTable from "@/components/ExplorerTable";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { catalog } from "@/lib/queries";
+import { turso } from "@/lib/turso";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+
+const env = Astro.locals.runtime?.env ?? import.meta.env;
+const tables = (await catalog(turso(env))).map((table) => ({
+  name: table.name,
+  title: table.title,
+  present: table.present,
+  rows: table.rows,
+  hasRegion: Boolean(table.hasRegion),
+}));
+---
+
+<Layout title="TerraSentinel — data explorer" description="Browse the serving tables with filters.">
+  <section class="mb-4 max-w-3xl">
+    <h2 class="text-xl font-semibold tracking-tight">Explorer</h2>
+    <p class="mt-2 text-sm text-[var(--color-muted)]">
+      Page through any table in the serving database. The table list comes from the catalog, and
+      the row query is built server-side against that allowlist — a name outside it is refused.
+      Absent tables (the Sentinel-dependent ones) are not selectable, because browsing a table
+      that does not exist is not a useful error to show you.
+    </p>
+  </section>
+
+  <Card>
+    <CardHeader>
+      <CardTitle>Browse</CardTitle>
+      <CardDescription>Newest rows first. Row counts are exact, not estimated.</CardDescription>
+    </CardHeader>
+    <CardContent>
+      <ExplorerTable client:only="react" tables={tables} />
+    </CardContent>
+  </Card>
+
+  <section class="mt-5">
+    <Card>
+      <CardHeader>
+        <CardTitle>Not in the list?</CardTitle>
+        <CardDescription>Three marts depend on a backfill that has not run.</CardDescription>
+      </CardHeader>
+      <CardContent className="text-sm text-[var(--color-muted)]">
+        <p>
+          The deforestation index, glacier backscatter trend and Sentinel hexagon layer need
+          Copernicus data through Google Earth Engine. The
+          <a href="/catalog" class="text-[var(--color-accent)] underline decoration-dotted">catalog</a>
+          shows exactly which, and what each will contain once it lands.
+        </p>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>

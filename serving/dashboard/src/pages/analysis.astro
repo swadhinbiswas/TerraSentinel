@@ -1,0 +1,188 @@
+---
+import IceLines from "@/components/charts/IceLines.astro";
+import MonthBars from "@/components/charts/MonthBars.astro";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, Td, Th } from "@/components/ui/table";
+import { iceTrends, regimeComparison, regionSummaries, seasonalProfile, topEvents } from "@/lib/queries";
+import { turso } from "@/lib/turso";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+
+const env = Astro.locals.runtime?.env ?? import.meta.env;
+const client = turso(env);
+
+const [profiles, regimes, summaries, events, iceRows] = await Promise.all([
+  seasonalProfile(client),
+  regimeComparison(client),
+  regionSummaries(client),
+  topEvents(client, 15),
+  iceTrends(client, { sinceDays: 400 }),
+]);
+
+const regions = [...new Set(profiles.map((row) => row.region_id))].sort();
+const fmt = (value: number | null | undefined, digits = 1): string =>
+  value === null || value === undefined ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
+const share = (value: number | null) => (value === null ? "—" : `${(value * 100).toFixed(0)}%`);
+
+const flagged = regimes.find((row) => row.regime === "flagged");
+const unflagged = regimes.find((row) => row.regime === "unflagged");
+const ratio = (a: number | null | undefined, b: number | null | undefined) =>
+  !a || !b ? null : a / b;
+
+const featureRows = flagged && unflagged
+  ? [
+      { label: "Mean detections", flagged: fmt(flagged.mean_detections), rest: fmt(unflagged.mean_detections), ratio: ratio(flagged.mean_detections, unflagged.mean_detections) },
+      { label: "Mean FRP per detection", flagged: fmt(flagged.frp_per_detection), rest: fmt(unflagged.frp_per_detection), ratio: ratio(flagged.frp_per_detection, unflagged.frp_per_detection) },
+      { label: "Night-time share", flagged: share(flagged.night_share), rest: share(unflagged.night_share), ratio: ratio(flagged.night_share, unflagged.night_share) },
+      { label: "Cell concentration", flagged: share(flagged.cell_concentration), rest: share(unflagged.cell_concentration), ratio: ratio(flagged.cell_concentration, unflagged.cell_concentration) },
+      { label: "Satellites seeing it", flagged: fmt(flagged.satellites, 2), rest: fmt(unflagged.satellites, 2), ratio: ratio(flagged.satellites, unflagged.satellites) },
+    ]
+  : [];
+---
+
+<Layout title="TerraSentinel — analysis" description="Seasonal shape, feature separation and the strongest events.">
+  <section class="mb-5 grid gap-3 md:grid-cols-2">
+    {summaries.map((summary) => (
+      <Card>
+        <CardHeader>
+          <CardTitle>{summary.region_id}</CardTitle>
+          <CardDescription>
+            {String(summary.first_day).slice(0, 10)} → {String(summary.last_day).slice(0, 10)} · {summary.days.toLocaleString()} days
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+          <div>
+            <p class="text-xs text-[var(--color-muted)]">Detections</p>
+            <p class="tabular-nums">{summary.total_detections.toLocaleString()}</p>
+          </div>
+          <div>
+            <p class="text-xs text-[var(--color-muted)]">Peak day</p>
+            <p class="tabular-nums">{summary.peak.toLocaleString()}</p>
+          </div>
+          <div>
+            <p class="text-xs text-[var(--color-muted)]">Median day</p>
+            <p class="tabular-nums">{fmt(summary.median, 0)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-[var(--color-muted)]">Flagged</p>
+            <p class="tabular-nums">
+              {summary.flagged_days} ({((summary.flagged_days / summary.days) * 100).toFixed(1)}%)
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    ))}
+  </section>
+
+  <section class="mb-5 grid gap-5 lg:grid-cols-2">
+    {regions.map((region) => (
+      <Card>
+        <CardHeader>
+          <CardTitle>Seasonal profile — {region}</CardTitle>
+          <CardDescription>
+            Mean detections per day by month. Orange bars are months that produced at least one
+            flagged day; the curve is what makes a winter anomaly legible.
+          </CardDescription>
+        </CardHeader>
+        <MonthBars
+          label={region}
+          data={profiles
+            .filter((row) => row.region_id === region)
+            .map((row) => ({ month: row.month, mean: row.mean_detections, flagged: row.flagged_days }))}
+        />
+      </Card>
+    ))}
+  </section>
+
+  <section class="mb-5 grid gap-5 lg:grid-cols-[1fr_1fr]">
+    <Card>
+      <CardHeader>
+        <CardTitle>Do the context features separate anything?</CardTitle>
+        <CardDescription>
+          Flagged days versus the rest. A detector that only separates magnitude is not
+          separating anything interesting — these columns are the test.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead>
+            <tr><Th>Feature</Th><Th>Flagged</Th><Th>Unflagged</Th><Th>Ratio</Th></tr>
+          </thead>
+          <tbody>
+            {featureRows.map((row) => (
+              <tr>
+                <Td>{row.label}</Td>
+                <Td>{row.flagged}</Td>
+                <Td>{row.rest}</Td>
+                <Td>{row.ratio === null ? "—" : `${row.ratio.toFixed(2)}×`}</Td>
+              </tr>
+            ))}
+            {featureRows.length === 0 && (
+              <tr><Td colSpan={4} className="text-[var(--color-muted)]">No scored observations yet.</Td></tr>
+            )}
+          </tbody>
+        </Table>
+      </CardContent>
+      <CardContent className="pt-0 text-xs text-[var(--color-muted)]">
+        {flagged && unflagged && flagged.frp_per_detection && unflagged.frp_per_detection && (
+          <p>
+            Flagged days carry roughly {ratio(flagged.frp_per_detection, unflagged.frp_per_detection)?.toFixed(1)}×
+            the intensity per detection and concentrate less — large events spread across many
+            hexagons rather than one. FRP pools MODIS and VIIRS, whose scales differ ~6× for the
+            same fires, so intensity features carry an instrument-mix confound.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>Cryosphere — observed vs normal</CardTitle>
+        <CardDescription>
+          The gap between the two series is the finding. Antarctic has run below the
+          1981–2010 normal for the entire window.
+        </CardDescription>
+      </CardHeader>
+      <IceLines rows={iceRows} region="antarctic" />
+      <IceLines rows={iceRows} region="arctic" />
+    </Card>
+  </section>
+
+  <section>
+    <Card>
+      <CardHeader>
+        <CardTitle>Strongest departures in the record</CardTitle>
+        <CardDescription>
+          Ranked by robust z-score. The top row is a winter event, which is the point: with a
+          seasonal baseline, an out-of-season day can outrank a megafire.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <Table>
+          <thead>
+            <tr>
+              <Th>Region</Th><Th>Date</Th><Th>Detections</Th><Th>z</Th>
+              <Th>Night</Th><Th>Cell conc.</Th><Th>FRP/det</Th><Th>Severity</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.map((event) => (
+              <tr>
+                <Td>{event.region_id}</Td>
+                <Td>{String(event.observation_date).slice(0, 10)}</Td>
+                <Td>{event.detection_count.toLocaleString()}</Td>
+                <Td>{fmt(event.zscore)}</Td>
+                <Td>{share(event.night_detection_share)}</Td>
+                <Td>{share(event.cell_concentration)}</Td>
+                <Td>{fmt(event.frp_per_detection)}</Td>
+                <Td><Badge tone={event.severity as never}>{event.severity}</Badge></Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>
