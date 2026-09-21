@@ -75,10 +75,24 @@ jobs:
           globs = json.load(open("transform/target/bronze_globs.json"))
           print(json.dumps({"bronze_root": "data/bronze_hf", "bronze_globs": globs}))
           PYEOF
-          dbt build \
-            --project-dir transform --profiles-dir transform \
-            --vars "$(cat transform/target/dbt_vars.json)" \
-            --no-partial-parse
+          # A source that was never backfilled fails its own staging model. Left
+          # unexcluded, that one failure skips the whole build — including the sync that
+          # publishes the marts which ARE ready. Excluding the absent branch keeps the
+          # failure to itself and the workflow still lands the data it has.
+          EXCLUDE="$(cat transform/target/dbt_exclude.txt 2>/dev/null || true)"
+          if [ -n "$EXCLUDE" ]; then
+            echo "excluding absent sources: $EXCLUDE"
+            dbt build \
+              --project-dir transform --profiles-dir transform \
+              --vars "$(cat transform/target/dbt_vars.json)" \
+              --exclude $EXCLUDE \
+              --no-partial-parse
+          else
+            dbt build \
+              --project-dir transform --profiles-dir transform \
+              --vars "$(cat transform/target/dbt_vars.json)" \
+              --no-partial-parse
+          fi
 
       - name: Train and validate
         env:

@@ -89,6 +89,27 @@ def missing_sources(manifest: dict[str, list[str]]) -> list[str]:
     return sorted(source_id for source_id, globs in manifest.items() if not globs)
 
 
+#: Staging model per source. A source with no files would make its staging model resolve to
+#: a self-describing missing relation, which fails `dbt build` — and a failed build skips
+#: everything downstream of it, including the sync that publishes the marts that *are*
+#: ready. Excluding an absent source's branch keeps its failure to itself, which is the same
+#: principle the one-mart-per-source split applied one level down.
+STAGING_MODEL_BY_SOURCE: dict[str, str] = {
+    "firms": "stg_firms",
+    "sentinel": "stg_sentinel",
+    "noaa_nsidc": "stg_noaa",
+}
+
+
+def exclusion_selector(manifest: dict[str, list[str]]) -> str:
+    """A dbt ``--exclude`` selector covering absent sources and their descendants."""
+    return " ".join(
+        f"{STAGING_MODEL_BY_SOURCE[source]}+"
+        for source in missing_sources(manifest)
+        if source in STAGING_MODEL_BY_SOURCE
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -96,6 +117,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--local-root", help="local bronze root to walk instead")
     parser.add_argument("--root", default=None, help="glob prefix (default: derived from --repo-id)")
     parser.add_argument("--out", default=None, help="write the manifest JSON here as well as stdout")
+    parser.add_argument(
+        "--emit-exclude",
+        default=None,
+        help="write a dbt --exclude selector for sources with no data (may be empty)",
+    )
     parser.add_argument(
         "--allow-missing",
         action="store_true",
@@ -121,11 +147,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(json.dumps(payload, indent=2))
 
     absent = missing_sources(manifest)
-    if absent and not args.allow_missing:
+    selector = exclusion_selector(manifest)
+    if args.emit_exclude:
+        destination = Path(args.emit_exclude)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(selector, encoding="utf-8")
+
+    if absent:
+        # Printed on stdout so it lands in the workflow log rather than only in a step
+        # summary: "which marts did not build, and why" is the first question a reader has.
         print(
-            f"no bronze files for source(s) {absent} — run the backfill before the transform",
+            f"\nno bronze files for source(s) {absent}: run the backfill, or exclude their "
+            f"branches from the dbt build"
+            + (f" (--exclude {selector})" if selector else ""),
             file=sys.stderr,
         )
+        if len(absent) == len(manifest):
+            print(
+                "every source is absent — run the backfill before the transform",
+                file=sys.stderr,
+            )
+            return 1
+    if absent and not args.allow_missing and not args.emit_exclude:
         return 1
     return 0
 

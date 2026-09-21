@@ -171,3 +171,40 @@ class TestCli:
     def test_missing_local_root_exits_two(self, tmp_path: Path, capsys) -> None:
         assert main(["--local-root", str(tmp_path / "gone")]) == 2
         assert "could not build bronze manifest" in capsys.readouterr().err
+
+
+class TestExclusionSelector:
+    """An absent source must be excluded from the dbt build, not fail it.
+
+    Without this, one un-backfilled source fails its staging model and dbt skips everything
+    downstream — including the sync that publishes the marts which are ready. Measured on a
+    real CI run: 94 models and tests passed and the Turso sync still never ran.
+    """
+
+    def test_absent_source_selects_its_whole_branch(self) -> None:
+        from tools.bronze_manifest import exclusion_selector
+
+        selector = exclusion_selector({"firms": ["g"], "sentinel": [], "noaa_nsidc": []})
+        assert "stg_sentinel+" in selector
+        assert "stg_noaa+" in selector
+        assert "stg_firms" not in selector
+
+    def test_all_present_yields_an_empty_selector(self) -> None:
+        from tools.bronze_manifest import exclusion_selector
+
+        assert exclusion_selector({"firms": ["g"], "sentinel": ["g"], "noaa_nsidc": ["g"]}) == ""
+
+    def test_selector_is_written_to_a_file(self, tmp_path: Path, capsys) -> None:
+        lake = tmp_path / "lake"
+        (lake / "firms").mkdir(parents=True)
+        (lake / "firms" / "x.parquet").write_bytes(b"PAR1")
+        destination = tmp_path / "exclude.txt"
+
+        code = main([
+            "--local-root", str(lake), "--root", "root",
+            "--emit-exclude", str(destination), "--allow-missing",
+        ])
+
+        assert code == 0
+        assert "stg_sentinel+" in destination.read_text()
+        capsys.readouterr()

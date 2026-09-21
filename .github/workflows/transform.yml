@@ -70,6 +70,7 @@ jobs:
           python -m tools.bronze_manifest \
             --local-root data/bronze_hf --root data/bronze_hf \
             --out transform/target/bronze_globs.json \
+            --emit-exclude transform/target/dbt_exclude.txt \
             --allow-missing > /dev/null
           python - <<'PYEOF' > transform/target/dbt_vars.json
           import json
@@ -80,10 +81,24 @@ jobs:
 
       - name: dbt build (models + tests)
         run: |
-          dbt build \
-            --project-dir transform --profiles-dir transform \
-            --vars "$(cat transform/target/dbt_vars.json)" \
-            --no-partial-parse
+          # A source that was never backfilled fails its own staging model. Left
+          # unexcluded, that one failure skips the whole build — including the sync that
+          # publishes the marts which ARE ready. Excluding the absent branch keeps the
+          # failure to itself and the workflow still lands the data it has.
+          EXCLUDE="$(cat transform/target/dbt_exclude.txt 2>/dev/null || true)"
+          if [ -n "$EXCLUDE" ]; then
+            echo "excluding absent sources: $EXCLUDE"
+            dbt build \
+              --project-dir transform --profiles-dir transform \
+              --vars "$(cat transform/target/dbt_vars.json)" \
+              --exclude $EXCLUDE \
+              --no-partial-parse
+          else
+            dbt build \
+              --project-dir transform --profiles-dir transform \
+              --vars "$(cat transform/target/dbt_vars.json)" \
+              --no-partial-parse
+          fi
 
       - name: Sync gold marts to Turso
         if: ${{ !inputs.skip_sync }}
