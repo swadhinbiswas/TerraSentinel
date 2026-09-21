@@ -19,7 +19,7 @@ model registry, Turso serves the gold tables, Cloudflare Pages serves the dashbo
 | 5 | Known-events validation + synthetic anomaly injection in CI | **done** |
 | 6 | Astro + shadcn/ui dashboard on Cloudflare Pages | **deployed** — https://terrasentinel-dashboard.pages.dev |
 | 7 | Evidently drift check → auto-retrain, alerting on every workflow | alerting done; drift pending |
-| 8 | ADRs | written |
+| 8 | Architecture decision records | written, folded into Design decisions below |
 
 `497` unit tests, a full dbt build, and a type-checked dashboard build, all offline. The transform layer runs against a
 synthetic lake with deliberately injected anomalies, and CI asserts the gold marts actually
@@ -297,7 +297,6 @@ serving/         Astro dashboard (Phase 6)
 pandera_schemas/ the data contracts between layers
 tools/           synthetic lake generator, seed export, anomaly assertions
 tests/           357 tests plus a full dbt build, all offline
-docs/adr/        why the non-obvious choices were made
 ```
 
 ## Setup
@@ -361,32 +360,58 @@ requests, all three sources ~900.
 
 ## Design decisions
 
-Each of these is written up in `docs/adr/`:
+Nine choices here are not self-evident from the code. Each one names the measurement that
+forced it, because the reasoning is the part worth reading.
 
-- [DuckDB over Spark](docs/adr/0001-duckdb-over-spark.md) — no warehouse, no cluster
-- [Turso over Postgres](docs/adr/0002-turso-over-postgres.md) — edge reads, batched writes
-- [H3 over raw lat/lon](docs/adr/0003-h3-over-raw-latlon.md) — bucketing at ingestion
-- [Astro + Cloudflare over Streamlit](docs/adr/0004-astro-cloudflare-over-streamlit.md)
-- [GEE aggregation grain](docs/adr/0005-gee-aggregation-grain.md) — why Sentinel is not
-  bucketed per-pixel
-- [NOAA source selection](docs/adr/0006-noaa-opendap-over-erddap.md) — what the free,
-  reachable archives actually are
-- [Bronze glob selection](docs/adr/0007-bronze-glob-selection.md) — why the listing happens
-  outside dbt
-- [Mirroring bronze locally](docs/adr/0009-mirror-bronze-locally.md) — why the transform
-  does not read `hf://` directly
+**DuckDB over Spark.** Two years of three sources is 10⁵–10⁶ numeric rows. A cluster adds
+cost and operational surface for no capability, and DuckDB reads the lake over HTTP with no
+staging step. Its limits are real — a process-per-job model, no libSQL adapter — and both
+are handled explicitly rather than hidden.
 
-Two things worth knowing before reading the code:
+**Turso over Postgres.** Pages Functions run in `workerd`, which cannot open a raw TCP
+connection. Reaching Postgres would need Hyperdrive or a proxy service on the request path.
+libSQL's HTTP protocol works from `workerd`, from CPython, and from CI with the same request
+shape — one transport and one typing rule set across the sync job and the serving layer.
 
-**Every collector is a template method.** `fetch()` is the only source-specific part; retry
-with full jitter, a per-source circuit breaker, Pandera validation at both ingress and
-egress, H3 indexing, provenance columns, and partitioned writes are inherited. A collector
-that hangs on a dead API is a bug in the base class, not in each collector.
+**H3 over raw lat/lon.** Grouping becomes string equality rather than a spatial join,
+resolutions nest for free, and proximity is a cheap k-ring. Resolution is chosen per source
+rather than uniformly, because the right bucket size differs by an order of magnitude
+between a 375 m fire detection and a 0.25° ocean grid.
 
-**Bronze is append-only and source-shaped.** Deduplication and schema unification happen in
-the staging models. That means a re-run is always safe, and an upstream column rename shows
-up as a validation failure at ingestion rather than as a null-filled dashboard.
+**Median and MAD over mean and standard deviation.** A large fire sits inside its own
+±15-day baseline window and would inflate the yardstick it is measured against, partly
+hiding itself. Measured on the same event: z 7.2 with mean/stddev versus 16.9 with
+median/MAD. And a ±15-day pooled window rather than "same date last year", because with two
+years of history a same-date baseline has a sample size of two.
 
+**Astro + Cloudflare over Streamlit.** Streamlit is the fastest route to a demo and the
+wrong shape: a Python server on the request path, limited layout control, no edge caching.
+Astro ships static HTML with two interactive islands, and Pages Functions read Turso
+directly with no backend service.
+
+**Two grains for Sentinel, not per-pixel H3.** Measured: bucketing Sentinel at res 7 means
+203,485 cells for Iberia and 677,760 for Norway — 200k+ polygons per `reduceRegions` call,
+which no free Earth Engine quota absorbs. A region-grain series (one request for an entire
+multi-year backfill) plus a res-5 change map answers the same questions at a cost that runs.
+
+**OPeNDAP from NOAA PSL, not the obvious archive.** The documented ERDDAP endpoint redirects
+to a host that times out, and NCEI's OISST copy turned out to be a stale 2002–2011 slice.
+NSIDC had also moved v3.0 → v4.0. All three findings came from probing the archives rather
+than reading about them.
+
+**Bronze glob selection outside dbt.** Two globs (`<source>/**` plus `backfill/<source>/**`)
+die the moment one prefix is missing — which is exactly the state after a backfill. A single
+leading `**` works over `hf://` but not on a local filesystem. So the listing happens once,
+authenticated, and dbt receives only globs known to match.
+
+**FIRMS product selection by window age.** Standard processing is published ~3 months behind
+real time and near-real-time is retained ~3 months, so choosing products by "is this a
+backfill?" returns silently empty data for the most recent quarter. Measured against the
+live API, with a fallback through the overlap.
+
+**Mirror the bronze lake before transforming.** DuckDB's `hf://` filesystem re-lists the repo
+tree on every query, so a build made dozens of API calls against a 1000-per-5-minutes quota.
+One listing plus parallel CDN fetches turns that into zero, and the build runs in seconds.
 ## Data attribution
 
 Fire data: NASA FIRMS (MODIS and VIIRS active fire products). Imagery: Copernicus Sentinel-2
