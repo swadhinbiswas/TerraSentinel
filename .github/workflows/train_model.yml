@@ -69,7 +69,9 @@ jobs:
           set -euo pipefail
           python -m tools.bronze_manifest \
             --local-root data/bronze_hf --root data/bronze_hf \
-            --out transform/target/bronze_globs.json --allow-missing > /dev/null
+            --out transform/target/bronze_globs.json \
+            --emit-exclude transform/target/dbt_exclude.txt \
+            --allow-missing > /dev/null
           python - <<'PYEOF' > transform/target/dbt_vars.json
           import json
           globs = json.load(open("transform/target/bronze_globs.json"))
