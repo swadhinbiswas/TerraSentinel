@@ -30,15 +30,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Install
         run: uv pip install --system -e ".[transform,ml,ml-tracking]"
@@ -123,6 +124,7 @@ jobs:
             --bundle-dir ml/artifacts/isolation_forest_fire
 
       - name: Batch-score the latest data into the serving database
+        id: score
         if: ${{ !inputs.dry_run }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -133,11 +135,38 @@ jobs:
           python -m ml.scoring.batch_score \
             --duckdb-path transform/terrasentinel.duckdb \
             --model-dir ml/artifacts/isolation_forest_fire \
-            --out ml/artifacts/predictions.parquet
+            --out ml/artifacts/predictions.parquet | tee /tmp/score.json
+
+      - name: Record the run
+        # Requirement: every workflow writes a pipeline_runs row, which is what the
+        # dashboard's freshness view and /api/health read. `if: always()` so a failed
+        # retrain is recorded too — a run that stopped happening is exactly what the
+        # health view exists to surface.
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          ROWS=$(python -c "
+          import json, pathlib
+          path = pathlib.Path('/tmp/score.json')
+          try:
+              text = path.read_text()
+              print(json.loads(text[text.index('{'):]).get('rows_scored', 0))
+          except Exception:
+              print(0)
+          " 2>/dev/null || echo 0)
+          STATUS="success"
+          if [ "${{ job.status }}" = "failure" ]; then STATUS="failed"; fi
+          python -m ops.pipeline_run \
+            --workflow train_model --status "$STATUS" --rows "$ROWS" --skip-hf \
+            --details '{"model_dir":"ml/artifacts/isolation_forest_fire"}'
 
       - name: Upload training artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: model-artifacts
           path: |

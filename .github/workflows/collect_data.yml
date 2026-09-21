@@ -67,15 +67,15 @@ jobs:
           fi
           echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.enabled == 'true'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.gate.outputs.enabled == 'true'
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         if: steps.gate.outputs.enabled == 'true'
         with:
           enable-cache: true

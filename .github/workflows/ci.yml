@@ -21,15 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Install (dev + transform + ml)
         run: uv pip install --system -e ".[dev,transform,ml,ml-tracking]"
@@ -95,7 +96,7 @@ jobs:
       - name: Gold sync must shape a payload without a database
         run: python -m sync.push_gold_to_turso --duckdb-path transform/terrasentinel.duckdb --dry-run
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
