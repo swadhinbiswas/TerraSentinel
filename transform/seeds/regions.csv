@@ -1,0 +1,8 @@
+region_id,name,anomaly_type,west,south,east,north,h3_resolution
+iberia_fire,Iberian Peninsula,fire,-10.0,35.5,3.5,43.9,7
+greece_fire,Greece & Aegean,fire,19.0,34.4,28.5,41.8,7
+carpathian_deforest,Romanian Carpathians,deforestation,21.0,43.9,27.6,48.3,7
+alps_ice,European Alps,ice,5.4,43.7,16.6,48.3,7
+norway_ice,Norway & Svalbard glaciers,ice,4.0,58.0,31.0,80.5,7
+arctic,Arctic sea ice,ice,-180.0,60.0,180.0,90.0,5
+antarctic,Antarctic sea ice,ice,-180.0,-90.0,180.0,-55.0,5

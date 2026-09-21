@@ -1,0 +1,109 @@
+version: 2
+
+models:
+  - name: int_fire_daily_region
+    description: >
+      Dense region x day fire activity. Zero-detection days are materialised rather
+      than missing, because "nothing burned" is the most important negative example
+      the fire model has.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [region_id, observation_date]
+      - not_empty
+    columns:
+      - name: region_id
+        tests: [not_null]
+      - name: observation_date
+        tests: [not_null]
+      - name: detection_count
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 100000
+      - name: h3_cell_count
+        tests: [not_null]
+
+  - name: int_fire_daily_h3
+    description: Sparse per-H3-cell daily fire counts, for the map layer.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [h3_index, observation_date]
+    columns:
+      - name: h3_index
+        tests: [not_null]
+      - name: detection_count
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 1
+                max_value: 100000
+
+  - name: int_seasonal_fire_baseline
+    description: >
+      Circular +/-15 day day-of-year fire baseline per region, using a median centre
+      and a scaled median-absolute-deviation scale. Robust statistics matter here
+      because a single large fire sits inside its own baseline window and would
+      otherwise inflate the yardstick it is measured against.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [region_id, day_of_year]
+    columns:
+      - name: day_of_year
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 1
+                max_value: 366
+      - name: baseline_median
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 100000
+      - name: baseline_mad
+        description: Median absolute deviation; null only if the window is empty.
+        tests:
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 100000
+      - name: baseline_scale
+        description: 1.4826 x MAD, a robust stand-in for the standard deviation.
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 1000000
+      - name: baseline_samples
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 1
+                max_value: 1000000
+
+  - name: int_sentinel_monthly_region
+    description: Monthly NDVI/SAR per region with the prior year's value for a year-over-year delta.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [region_id, metric_type, month_start]
+    columns:
+      - name: region_id
+        tests: [not_null]
+      - name: metric_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: [ndvi, sar_backscatter]
+      - name: value_mean
+        tests: [not_null]

@@ -1,0 +1,29 @@
+# dbt profile for TerraSentinel.
+#
+# DuckDB is an in-process library, so there is no server to configure: `dbt run`
+# creates the .duckdb file on first use and every model is a schema inside it.
+# httpfs is what lets DuckDB read parquet straight from the Hub with no download
+# step — see docs/adr/0001-duckdb-over-spark.md.
+#
+# Credentials come from the environment only:
+#   HF_BRONZE_REPO   swadhinbiswas/TerraSentinel
+#   HF_TOKEN         only needed if the bronze repo is private
+#
+# Run dbt from the REPOSITORY ROOT so every relative path below is cwd-stable:
+#   dbt build --project-dir transform --profiles-dir transform \
+#             --vars '{"bronze_root": "data/bronze"}'
+
+terrasentinel:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'transform/terrasentinel.duckdb') }}"
+      schema: main
+      threads: 4
+      extensions:
+        - httpfs
+      settings:
+        # Keep memory bounded so the same profile works on a 7GB Actions runner.
+        memory_limit: "2GB"
+        preserve_insertion_order: false

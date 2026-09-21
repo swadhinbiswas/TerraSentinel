@@ -1,0 +1,77 @@
+name: terrasentinel
+version: "1.0.0"
+profile: terrasentinel
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages", "logs"]
+
+vars:
+  #: Bronze lake root. Defaults to the Hub; override for local development:
+  #:   dbt run --vars '{"bronze_root": "data/bronze"}'
+  #: Set HF_BRONZE_REPO (e.g. swadhinbiswas/TerraSentinel) to use the Hub.
+  #: Kept explicit rather than derived so a local run can never silently read
+  #: production data, or vice versa.
+  # Calibrated on two years of real FIRMS data rather than picked. Fire counts are
+  # extremely heavy-tailed (Iberia: median 99/day, p99 2986, peak 13329), so a
+  # median/MAD threshold of 3 flags 5.7% of all days — too loose to be a signal.
+  # Measured flag rates: z>=3 -> 5.7%, z>=4 -> 3.4%, z>=5 -> 2.5%, z>=6 -> 1.6%.
+  # 5.0 settles at roughly 2.5%, about nine flagged days per region per year.
+  fire_zscore_threshold: 5.0
+  ndvi_drop_zscore_threshold: -2.0
+  ice_zscore_threshold: 2.5
+  #: Freshness budgets, in days, per source. A source older than this fails its test.
+  fire_freshness_days: 3
+  sentinel_freshness_days: 45
+  noaa_freshness_days: 10
+  #: Minimum baseline sample size before a z-score is considered meaningful.
+  min_baseline_samples: 10
+
+seeds:
+  terrasentinel:
+    regions:
+      +schema: staging
+      +column_types:
+        region_id: varchar
+        name: varchar
+        anomaly_type: varchar
+        west: double
+        south: double
+        east: double
+        north: double
+        h3_resolution: integer
+    sources:
+      +schema: staging
+      +column_types:
+        source_id: varchar
+        label: varchar
+        metric_types: varchar
+        anomaly_types: varchar
+        h3_resolution: integer
+        cadence_cron: varchar
+        attribution: varchar
+
+models:
+  terrasentinel:
+    staging:
+      +schema: staging
+      # Materialised, not a view, and that is deliberate: these read remote
+      # parquet, and DuckDB re-lists the Hub repo tree on every reference to an
+      # hf:// path. As a view, each of the ~50 tests would re-fetch the listing and
+      # exhaust the Hub's 1000-requests-per-5-minutes API quota. As a table the
+      # remote read happens exactly once per model.
+      +materialized: table
+    intermediate:
+      # Local by this point (they read staging tables), so views are free.
+      +schema: intermediate
+      +materialized: view
+    marts:
+      +schema: gold
+      +materialized: table
+
+tests:
+  terrasentinel:
+    +severity: error

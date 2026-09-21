@@ -1,0 +1,206 @@
+version: 2
+
+models:
+  - name: gold_fire_anomalies
+    description: >
+      Daily fire anomaly per region: detection counts scored against the region's own
+      +/-15 day seasonal baseline, using a median centre and a scaled-MAD scale so an
+      extreme fire cannot hide itself by inflating its own baseline. `anomaly_score`
+      stays null until the ML batch scoring job fills it, which is distinct from a
+      null `zscore` (insufficient baseline history).
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [region_id, observation_date]
+      - not_empty
+    columns:
+      - name: region_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('regions')
+                field: region_id
+      - name: observation_date
+        tests: [not_null]
+      - name: detection_count
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 100000
+      - name: baseline_method
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [median_mad]
+      - name: night_detection_share
+        description: Fraction of the day's detections acquired at night; null on zero-detection days.
+        tests:
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: cell_concentration
+        description: Share of the day's detections falling in its single densest H3 cell.
+        tests:
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: frp_per_detection
+        description: >
+          Mean fire radiative power per detection. Note this pools MODIS and VIIRS, whose
+          FRP scales differ by roughly 6x for the same fires, so it carries an
+          instrument-mix confound.
+        tests:
+          - column_between:
+              arguments:
+                min_value: 0
+                max_value: 100000
+      - name: zscore
+        tests:
+          # Catches a divide-by-zero or sign error turning into an absurd score.
+          - column_between:
+              arguments:
+                min_value: -1000
+                max_value: 100000
+      - name: severity
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [unknown, normal, moderate, high, extreme]
+      - name: is_anomaly
+        description: Null when there is not enough baseline history to score the day.
+
+  - name: gold_deforestation_index
+    description: >
+      Monthly NDVI per region with a year-over-year change and a z-score against the
+      distribution of that region's own changes. A drop in vegetation shows up as a
+      negative z-score, so `is_anomaly` tests the lower tail.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [region_id, month_start]
+    columns:
+      - name: region_id
+        tests: [not_null]
+      - name: month_start
+        tests: [not_null]
+      - name: ndvi_mean
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: -1
+                max_value: 1
+      - name: ndvi_change
+        tests:
+          - column_between:
+              arguments:
+                min_value: -2
+                max_value: 2
+      - name: severity
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [unknown, normal, moderate, high, extreme]
+
+  - name: gold_ice_extent_trends
+    description: >
+      Daily sea-ice extent per hemisphere scored against the published NSIDC 1981-2010
+      per-day normal. Split from the former combined ice mart so a missing Sentinel
+      source cannot remove sea-ice results.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [region_id, period_start]
+      - not_empty
+    columns:
+      - name: region_id
+        tests: [not_null]
+      - name: period_start
+        tests: [not_null]
+      - name: metric_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: [sea_ice_extent]
+      - name: baseline_source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [nsidc_climatology]
+      - name: severity
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [unknown, normal, moderate, high, extreme]
+
+  - name: gold_glacier_backscatter
+    description: >
+      Monthly SAR backscatter per glacier region, scored against its own year-over-year
+      change distribution. No climatology exists for backscatter, so the baseline is
+      weaker than the sea-ice arm's and `baseline_source` says so.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [region_id, period_start]
+    columns:
+      - name: region_id
+        tests: [not_null]
+      - name: baseline_source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [series_yoy]
+      - name: severity
+        tests:
+          - accepted_values:
+              arguments:
+                values: [unknown, normal, moderate, high, extreme]
+
+  - name: gold_h3_fire
+    description: Fire detections per H3 res-7 cell per day — the map's fire layer.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [h3_index, period_start]
+      - not_empty
+    columns:
+      - name: h3_index
+        tests: [not_null]
+      - name: value
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: 1
+                max_value: 1000000
+
+  - name: gold_h3_sst
+    description: Monthly sea-surface temperature anomaly per H3 res-5 cell — the marine precursor layer.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [h3_index, period_start, metric_type]
+    columns:
+      - name: metric_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: [sst_anomaly]
+
+  - name: gold_h3_sentinel
+    description: Year-over-year NDVI/SAR change per H3 res-5 cell — the vegetation and glacier layer.
+    tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [h3_index, period_start, metric_type]

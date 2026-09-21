@@ -1,0 +1,147 @@
+version: 2
+
+seeds:
+  - name: regions
+    description: >
+      Study regions, exported from collectors/config.py by `tools/export_seeds.py`.
+      Committed so dbt works without a pre-step, and regenerated in CI so it cannot
+      drift from the Python registry that the collectors actually use.
+    columns:
+      - name: region_id
+        tests: [unique, not_null]
+      - name: anomaly_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [fire, deforestation, ice]
+      - name: h3_resolution
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [4, 5, 6, 7, 8]
+
+  - name: sources
+    description: Data source registry, including the attribution strings the dashboard footer renders.
+    columns:
+      - name: source_id
+        tests: [unique, not_null]
+      - name: attribution
+        tests: [not_null]
+
+models:
+  - name: stg_firms
+    description: One row per deduplicated fire detection, with instrument-specific brightness unified.
+    tests:
+      # Fire detections arrive every six hours; anything older than a few days
+      # means the collector or the upstream feed has stopped.
+      - not_older_than:
+          arguments:
+            column_name: observation_date
+            source_id: fire
+            days: 3
+    columns:
+      - name: observed_at
+        description: Acquisition time, UTC.
+        tests: [not_null]
+      - name: observation_date
+        tests: [not_null]
+      - name: latitude
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: -90
+                max_value: 90
+      - name: longitude
+        tests:
+          - not_null
+          - column_between:
+              arguments:
+                min_value: -180
+                max_value: 180
+      - name: h3_index
+        tests: [not_null]
+      - name: region_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('regions')
+                field: region_id
+      - name: confidence
+        tests:
+          - accepted_values:
+              arguments:
+                values: [low, nominal, high]
+      - name: confidence_pct
+        tests: [not_null]
+      - name: frp
+        description: Fire radiative power in MW; null when the product omits it.
+      - name: product
+        tests: [not_null]
+
+  - name: stg_sentinel
+    description: Sentinel composites at both grains — `region` series rows and `grid` change rows.
+    tests:
+      # Monthly composites, so the budget is generous by design.
+      - not_older_than:
+          arguments:
+            column_name: period_end
+            source_id: sentinel
+            days: 45
+    columns:
+      - name: period_end
+        tests: [not_null]
+      - name: spatial_scope
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [region, grid]
+      - name: metric_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: [ndvi, sar_backscatter]
+      - name: h3_index
+        tests: [not_null]
+      - name: region_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('regions')
+                field: region_id
+
+  - name: stg_noaa
+    description: NOAA SST anomalies and NSIDC sea-ice extent and climatology.
+    tests:
+      - not_older_than:
+          arguments:
+            column_name: observation_date
+            source_id: noaa
+            days: 10
+    columns:
+      - name: observed_at
+        tests: [not_null]
+      - name: metric_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: [sst_anomaly, sea_ice_extent, sea_ice_extent_climatology]
+      - name: spatial_scope
+        tests:
+          - accepted_values:
+              arguments:
+                values: [point, gridded, hemispheric]
+      - name: region_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('regions')
+                field: region_id
+      - name: unit
+        tests: [not_null]
