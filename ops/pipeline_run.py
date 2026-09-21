@@ -293,6 +293,10 @@ class PipelineRunRecorder:
                 [run.as_row(updated_at=self._now().isoformat())],
                 key_columns=["run_id"],
             )
+            # Refreshed here rather than only in the metadata CLI, because this is the path
+            # every workflow actually takes — without it the source registry stayed empty
+            # and the dashboard's attribution had nothing to read.
+            register_sources(self.turso)
         except Exception as exc:  # noqa: BLE001
             LOGGER.error("could not write run record to Turso: %s", redact_text(exc))
 

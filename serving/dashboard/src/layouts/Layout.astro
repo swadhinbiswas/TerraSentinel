@@ -1,5 +1,7 @@
 ---
 import ThemeToggle from "@/components/ui/theme-toggle";
+import { sources } from "@/lib/queries";
+import { turso } from "@/lib/turso";
 import "@/styles/global.css";
 
 interface Props {
@@ -24,13 +26,34 @@ const NAV = [
   { href: "/docs", label: "Docs" },
 ];
 
-// Attribution is a licence requirement for all three providers, so it lives in the
-// layout rather than in each page where it could be forgotten.
-const ATTRIBUTION = [
-  { text: "NASA FIRMS", detail: "MODIS and VIIRS active fire products", href: "https://firms.modaps.eosdis.nasa.gov/" },
-  { text: "Copernicus Sentinel", detail: "ESA, processed in Google Earth Engine", href: "https://dataspace.copernicus.eu/" },
-  { text: "NOAA / NSIDC", detail: "OISST v2.1 and Sea Ice Index v4.0", href: "https://nsidc.org/data/g02135" },
+// Attribution is a licence requirement for all three providers, so it lives in the layout
+// rather than in each page where it could be forgotten.
+//
+// It is read from the `sources` table that the pipeline upserts on every run, so the
+// footer cannot drift from the configuration the collectors actually use. The fallback is
+// not decoration: a database problem must not take out every page on the site, and the
+// attribution still has to render.
+const FALLBACK_ATTRIBUTION: { label: string; attribution: string }[] = [
+  { label: "NASA FIRMS", attribution: "Fire data: NASA FIRMS (MODIS and VIIRS active fire products)." },
+  {
+    label: "Copernicus Sentinel",
+    attribution: "Imagery: Copernicus Sentinel-2 and Sentinel-1 (ESA), processed in Google Earth Engine.",
+  },
+  {
+    label: "NOAA / NSIDC",
+    attribution: "Ocean and ice data: NOAA OISST v2.1 and NSIDC Sea Ice Index (v4.0).",
+  },
 ];
+
+let attribution = FALLBACK_ATTRIBUTION;
+try {
+  const rows = await sources(turso(Astro.locals.runtime?.env ?? import.meta.env));
+  if (rows.length > 0) {
+    attribution = rows.map((row) => ({ label: row.label, attribution: row.attribution }));
+  }
+} catch {
+  // keep the fallback
+}
 ---
 
 <!doctype html>
@@ -88,13 +111,8 @@ const ATTRIBUTION = [
       <footer class="border-t border-[var(--color-border)] px-4 py-4 text-xs text-[var(--color-muted)]">
         <p class="mb-1 font-medium text-[var(--color-foreground)]">Data attribution</p>
         <ul class="flex flex-wrap gap-x-4 gap-y-1">
-          {ATTRIBUTION.map((item) => (
-            <li>
-              <a href={item.href} class="underline decoration-dotted hover:text-[var(--color-foreground)]" target="_blank" rel="noreferrer">
-                {item.text}
-              </a>
-              <span class="ml-1">{item.detail}</span>
-            </li>
+          {attribution.map((item) => (
+            <li>{item.attribution}</li>
           ))}
         </ul>
         <p class="mt-2">

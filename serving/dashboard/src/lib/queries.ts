@@ -622,3 +622,23 @@ export async function topEvents(client: Client, limit = 15): Promise<TopEvent[]>
   });
   return result.rows as unknown as TopEvent[];
 }
+
+
+export interface SourceRow {
+  source_id: string;
+  label: string;
+  attribution: string;
+  cadence_human: string | null;
+  credentials: string | null;
+}
+
+/** The source registry, which the pipeline upserts on every run.
+ *
+ * The dashboard footer renders from this rather than from a constant in a template, so an
+ * attribution cannot drift from the configuration the collectors use. */
+export async function sources(client: Client): Promise<SourceRow[]> {
+  const result = await client.execute(
+    "select source_id, label, attribution, cadence_human, credentials from sources order by source_id",
+  );
+  return result.rows as unknown as SourceRow[];
+}
