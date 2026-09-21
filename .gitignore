@@ -1,0 +1,55 @@
+# --- secrets -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+# Credential-shaped JSON (a GEE service-account file) must never be committed, but
+# lockfiles and app config must be — `npm ci` in CI fails without package-lock.json.
+*.json
+!tests/fixtures/*.json
+!serving/dashboard/package.json
+!serving/dashboard/tsconfig.json
+!serving/dashboard/package-lock.json
+gee-service-account*.json
+service-account*.json
+
+# --- python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+basedpyright/
+
+# --- cloudflare / astro --------------------------------------------------
+.dev.vars
+.wrangler/
+# --- local data (never commit raw pulls) ---------------------------------
+data/
+*.duckdb
+*.duckdb.wal
+transform/target/
+transform/logs/
+mlruns/
+mlartifacts/
+mlflow.db
+ml/runs/
+ml/artifacts/
+
+# --- node / astro --------------------------------------------------------
+node_modules/
+serving/dashboard/dist/
+serving/dashboard/.astro/
+serving/dashboard/.wrangler/
+
+# --- editors / os --------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp
