@@ -84,11 +84,18 @@ jobs:
         env:
           MLFLOW_DISABLE_AGENT_HINT: "1"
         run: |
+          # Decided in shell: a GitHub expression like `inputs.X != false` coerces a null
+          # input unpredictably between scheduled and manual runs, and the failure mode is
+          # a retrain that silently skips the validation gate.
+          ARGS="--require-known-events"
+          if [ "${{ inputs.require_known_events }}" = "false" ]; then
+            ARGS=""
+          fi
           python -m ml.train.train_isolation_forest \
             --duckdb-path transform/terrasentinel.duckdb \
             --out-dir ml/artifacts/isolation_forest_fire \
             --dataset-commit "${{ steps.lake.outputs.commit }}" \
-            ${{ inputs.require_known_events != false && '--require-known-events' || '' }}
+            $ARGS
 
       - name: Publish to the model registry
         if: ${{ !inputs.dry_run }}

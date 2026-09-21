@@ -43,8 +43,24 @@ jobs:
           npx astro check
           npx astro build
 
+      - name: Check for Cloudflare credentials
+        # `secrets` cannot be referenced directly in an `if:` conditional — doing so
+        # evaluates to empty and silently skips the step, which would look exactly like a
+        # successful build that never deployed. A step-level env var is the documented
+        # workaround, and this step makes the skip visible instead of quiet.
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "have_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CLOUDFLARE_API_TOKEN is not set — build verified, deploy skipped"
+          fi
+
       - name: Deploy to Cloudflare Pages
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        if: steps.creds.outputs.have_creds == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

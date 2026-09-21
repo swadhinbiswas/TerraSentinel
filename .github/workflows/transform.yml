@@ -93,9 +93,13 @@ jobs:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="--dry-run --no-metadata"
+          fi
           python -m sync.push_gold_to_turso \
             --duckdb-path transform/terrasentinel.duckdb \
-            ${{ inputs.dry_run && '--dry-run --no-metadata' || '' }}
+            $ARGS
 
       - name: Upload dbt artifacts
         if: always()

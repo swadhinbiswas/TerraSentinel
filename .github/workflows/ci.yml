@@ -95,6 +95,12 @@ jobs:
       - name: Gold sync must shape a payload without a database
         run: python -m sync.push_gold_to_turso --duckdb-path transform/terrasentinel.duckdb --dry-run
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: serving/dashboard/package-lock.json
+
       - name: Dashboard build (type-checked, no credentials needed)
         # `astro check` is the gate that matters here: it caught a `class` vs
         # `className` mistake on React islands (silently dropping every style) and a
