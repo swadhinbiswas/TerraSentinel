@@ -1,4 +1,4 @@
-# TerraSentinel
+# <img src="serving/dashboard/public/favicon.svg" alt="" width="44" height="44"> TerraSentinel
 
 Anomaly detection on free public satellite and sensor data (wildfire, deforestation,
 glacier and ice melt), running end to end on free tiers. Ingestion, a versioned data lake,
@@ -7,12 +7,16 @@ SQL transforms, unsupervised ML, and an edge-served dashboard.
 **Cost: $0.** GitHub Actions does the compute, Hugging Face Hub stores the lake and the
 model registry, Turso serves the gold tables, Cloudflare Pages serves the dashboard.
 
+![The TerraSentinel overview page: the anomaly map over Iberia with H3 cells and fire
+detections, the daily fire detections chart, and KPI cards reporting 268,543 detections
+and 32 flagged days.](docs/dashboard.png)
+
 ## Status
 
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Historical backfill (FIRMS, Sentinel, NOAA/NSIDC) → HF bronze | NOAA/NSIDC + FIRMS **live** on schedule; GEE awaiting service-account key |
-| 1 | FIRMS → bronze → dbt staging → Turso → one API route | collectors + staging + sync done; API route pending |
+| 1 | FIRMS → bronze → dbt staging → Turso → one API route | collectors + staging + sync done; API routes shipped with phase 6 |
 | 2 | Sentinel (GEE) + NOAA/NSIDC collectors, unified silver contract | collectors done |
 | 3 | dbt staging/intermediate/gold + automated Turso sync | **done**: 117 nodes, all tests green |
 | 4 | Feature table, IsolationForest, MLflow, HF model registry, batch scoring | **done** |
@@ -85,18 +89,11 @@ reaches compiled SQL or an uploaded artifact.
 
 ## Architecture
 
-```
-NASA FIRMS ─┐
-Sentinel-2/1 (GEE) ─┼─► collectors ─► HF bronze (parquet, versioned)
-NOAA / NSIDC ─┤                        │
-ENTSO-E ─┘                             │
-                                       ├─► dbt + DuckDB ─► gold marts ─► Turso (libSQL)
-                                       │                                   │
-                                       └─► features ─► unsupervised ML ────┤
-                                                          │                │
-                                              HF model registry    Astro API routes
-                                                                   (Cloudflare Pages)
-```
+![TerraSentinel architecture: four public sources feed cron-scheduled collectors into a
+versioned Hugging Face bronze lake, which dbt and DuckDB turn into seven gold marts synced
+to Turso, while an ML branch trains an IsolationForest and batch scores predictions back
+into Turso; Astro API routes on Cloudflare Pages serve the dashboard. A dashed Databricks
+path mirrors the lake as a paused hybrid second path.](docs/architecture.svg)
 
 **No live Python inference runs on the request path.** Batch scoring applies the
 registered model to the latest gold features and writes `anomaly_score` into Turso as part
@@ -295,7 +292,6 @@ that flags everything would sail past a naive sensitivity check. CI runs
 exactly this. The last run: fire z=16.9 extreme, NDVI z=-3.1 high, ice z=-4.3 extreme, fire
 flag rate 0.62%.
 
-
 ## Layout
 
 ```
@@ -306,6 +302,8 @@ ml/              features, training, registry, scoring, validation, drift
 sync/            gold marts → Turso (idempotent upsert)
 ops/             alerting, run metadata, redaction, resilience
 serving/         Astro dashboard (Phase 6)
+databricks/      hybrid second path: Asset Bundle, Workflows, UC DDL (paused)
+docs/            architecture diagram
 pandera_schemas/ the data contracts between layers
 tools/           synthetic lake generator, seed export, anomaly assertions
 tests/           592 tests plus a full dbt build, all offline

@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 880" width="1240" height="880"
+     font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-dashed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- card -->
+  <rect x="0.5" y="0.5" width="1239" height="879" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+
+  <!-- ===== sources ===== -->
+  <text x="134" y="19" font-size="10.5" font-weight="600" letter-spacing="1.2" fill="#94a3b8">PUBLIC DATA SOURCES</text>
+  <rect x="134" y="28" width="824" height="76" rx="10" fill="#fbfcfd" stroke="#cbd5e1" stroke-dasharray="4 3"/>
+  <g font-size="13" text-anchor="middle" fill="#0f172a">
+    <rect x="150" y="44" width="186" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="243" y="71">NASA FIRMS</text>
+    <rect x="352" y="44" width="186" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="445" y="71">Sentinel-2/1 (GEE)</text>
+    <rect x="554" y="44" width="186" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="647" y="71">NOAA / NSIDC</text>
+    <rect x="756" y="44" width="186" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="849" y="71">ENTSO-E (A44, A65)</text>
+  </g>
+
+  <!-- sources -> collectors -->
+  <path d="M546 104 V133" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- collectors -->
+  <rect x="356" y="140" width="380" height="66" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="546" y="166" font-size="14.5" font-weight="600" text-anchor="middle" fill="#0f172a">Collectors</text>
+  <text x="546" y="188" font-size="11.5" text-anchor="middle" fill="#64748b">scheduled on cron · paced · validated · redacted</text>
+
+  <!-- collectors -> bronze -->
+  <path d="M546 206 V229" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- bronze lake -->
+  <rect x="336" y="236" width="420" height="74" rx="10" fill="#fff7ed" stroke="#e07b39" stroke-width="1.7"/>
+  <text x="546" y="264" font-size="14.5" font-weight="600" text-anchor="middle" fill="#7c2d12">Hugging Face bronze lake</text>
+  <text x="546" y="287" font-size="11.5" text-anchor="middle" fill="#b45309">parquet · git-versioned · firms · sentinel · noaa_nsidc · entsoe</text>
+
+  <!-- bronze -> dbt -->
+  <path d="M546 310 V331" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- dbt -->
+  <rect x="386" y="338" width="320" height="66" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.4"/>
+  <text x="546" y="364" font-size="14.5" font-weight="600" text-anchor="middle" fill="#1e3a8a">dbt + DuckDB</text>
+  <text x="546" y="386" font-size="11.5" text-anchor="middle" fill="#64748b">staging → intermediate → gold · 117 nodes</text>
+
+  <!-- dbt -> gold marts -->
+  <path d="M546 404 V427" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- gold marts -->
+  <rect x="386" y="434" width="320" height="66" rx="10" fill="#ffffff" stroke="#475569" stroke-width="1.6"/>
+  <text x="546" y="460" font-size="14.5" font-weight="600" text-anchor="middle" fill="#0f172a">Gold marts (7)</text>
+  <text x="546" y="482" font-size="11.5" text-anchor="middle" fill="#64748b">anomaly flags · z-scores · H3 cells · trends</text>
+
+  <!-- marts -> feature table -->
+  <path d="M706 467 H753" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- feature table -->
+  <rect x="760" y="434" width="210" height="66" rx="10" fill="#faf5ff" stroke="#c084fc" stroke-width="1.4"/>
+  <text x="865" y="460" font-size="14.5" font-weight="600" text-anchor="middle" fill="#581c87">Feature table</text>
+  <text x="865" y="482" font-size="11.5" text-anchor="middle" fill="#7e22ce">27 strictly causal</text>
+
+  <!-- feature table -> training -->
+  <path d="M970 467 H1003" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- training + registry -->
+  <rect x="1010" y="434" width="200" height="66" rx="10" fill="#faf5ff" stroke="#c084fc" stroke-width="1.4"/>
+  <text x="1110" y="460" font-size="14.5" font-weight="600" text-anchor="middle" fill="#581c87">IsolationForest</text>
+  <text x="1110" y="481" font-size="11.5" text-anchor="middle" fill="#7e22ce">MLflow → HF registry</text>
+
+  <!-- training -> batch scoring -->
+  <path d="M1110 500 V533" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- batch scoring -->
+  <rect x="1010" y="540" width="200" height="66" rx="10" fill="#faf5ff" stroke="#c084fc" stroke-width="1.4"/>
+  <text x="1110" y="566" font-size="14.5" font-weight="600" text-anchor="middle" fill="#581c87">Batch scoring</text>
+  <text x="1110" y="587" font-size="11.5" text-anchor="middle" fill="#7e22ce">→ ml_predictions</text>
+
+  <!-- marts -> turso sync -->
+  <path d="M546 500 V533" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- turso sync -->
+  <rect x="386" y="540" width="320" height="60" rx="10" fill="#ffffff" stroke="#475569" stroke-width="1.6"/>
+  <text x="546" y="565" font-size="14.5" font-weight="600" text-anchor="middle" fill="#0f172a">Turso sync</text>
+  <text x="546" y="585" font-size="11.5" text-anchor="middle" fill="#64748b">idempotent upsert, per source arm</text>
+
+  <!-- sync -> turso -->
+  <path d="M546 600 V628 H700 V643" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- scoring -> turso -->
+  <path d="M1110 606 V628 H846 V643" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- turso -->
+  <rect x="653" y="650" width="240" height="96" rx="12" fill="#ecfeff" stroke="#06b6d4" stroke-width="1.7"/>
+  <text x="773" y="682" font-size="15" font-weight="600" text-anchor="middle" fill="#155e75">Turso (libSQL)</text>
+  <text x="773" y="704" font-size="11.5" text-anchor="middle" fill="#0e7490">gold tables + predictions</text>
+  <text x="773" y="723" font-size="11" text-anchor="middle" fill="#0e7490">read-only token for serving</text>
+
+  <!-- turso -> api -->
+  <path d="M893 695 H933" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- api routes -->
+  <rect x="940" y="660" width="200" height="70" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text x="1040" y="688" font-size="14.5" font-weight="600" text-anchor="middle" fill="#0f172a">Astro API routes</text>
+  <text x="1040" y="710" font-size="11.5" text-anchor="middle" fill="#64748b">7 read-only endpoints</text>
+
+  <!-- api -> dashboard -->
+  <path d="M1040 730 V759" fill="none" stroke="#64748b" stroke-width="1.7" marker-end="url(#arrow)"/>
+
+  <!-- dashboard -->
+  <rect x="940" y="766" width="200" height="72" rx="10" fill="#fff7ed" stroke="#e07b39" stroke-width="1.7"/>
+  <text x="1040" y="796" font-size="14.5" font-weight="600" text-anchor="middle" fill="#7c2d12">Dashboard</text>
+  <text x="1040" y="817" font-size="10.5" text-anchor="middle" fill="#9a3412">terrasentinel-dashboard.pages.dev</text>
+
+  <!-- databricks second path (dashed) -->
+  <path d="M336 273 H260 V653" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow-dashed)"/>
+  <rect x="140" y="660" width="240" height="96" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <text x="260" y="690" font-size="14.5" font-weight="600" text-anchor="middle" fill="#475569">Databricks</text>
+  <text x="260" y="712" font-size="11.5" text-anchor="middle" fill="#64748b">Asset Bundle · UC · Workflows</text>
+  <text x="260" y="731" font-size="11.5" text-anchor="middle" fill="#64748b">hybrid second path, paused</text>
+
+  <!-- footer -->
+  <text x="140" y="800" font-size="12" fill="#94a3b8">$0 on the free tier: GitHub Actions · Hugging Face Hub · Turso · Cloudflare Pages</text>
+</svg>
