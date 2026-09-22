@@ -7,9 +7,8 @@ SQL transforms, unsupervised ML, and an edge-served dashboard.
 **Cost: $0.** GitHub Actions does the compute, Hugging Face Hub stores the lake and the
 model registry, Turso serves the gold tables, Cloudflare Pages serves the dashboard.
 
-![The TerraSentinel overview page: the anomaly map over Iberia with H3 cells and fire
-detections, the daily fire detections chart, and KPI cards reporting 268,543 detections
-and 32 flagged days.](docs/dashboard.png)
+![The TerraSentinel overview page: the anomaly map over Iberia with its H3 cells, the daily
+fire detections chart, and KPI cards reporting 268,543 detections and 32 flagged days.](docs/dashboard.png)
 
 ## Status
 
