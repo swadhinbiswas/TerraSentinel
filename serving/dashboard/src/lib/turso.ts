@@ -16,23 +16,40 @@ let cached: Client | undefined;
 
 export interface TursoEnv {
   TURSO_DATABASE_URL?: string;
+  /** Read-only token, preferred everywhere the dashboard reads (which is everywhere). */
+  TURSO_TOKEN_RO?: string;
+  /** Full-scope token, kept as a fallback for a deployment not yet migrated. */
   TURSO_AUTH_TOKEN?: string;
+}
+
+/** The token actually in use: read-only if one is configured.
+ *
+ *  Reporting the scope has to read the same value `turso()` connects with, or the SQL
+ *  console could advertise `ro` while the queries run with `rw`.
+ */
+export function authToken(env: TursoEnv): string | undefined {
+  return env.TURSO_TOKEN_RO ?? env.TURSO_AUTH_TOKEN;
 }
 
 export function turso(env: TursoEnv): Client {
   if (cached) return cached;
 
   const url = env.TURSO_DATABASE_URL;
-  const authToken = env.TURSO_AUTH_TOKEN;
+  // Prefer the read-only token. Every statement this layer issues is a SELECT, so write
+  // scope buys nothing here except blast radius: with a write token, a bug in the SQL
+  // console's guard has write consequences instead of none. `TURSO_AUTH_TOKEN` stays as
+  // the fallback so an unrotated deployment keeps serving rather than failing closed.
+  const token = authToken(env);
 
-  if (!url || !authToken) {
+  if (!url || !token) {
     throw new Error(
-      "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set as Pages environment " +
-        "variables. Locally, put them in serving/dashboard/.dev.vars (gitignored).",
+      "TURSO_DATABASE_URL and TURSO_TOKEN_RO (preferred) or TURSO_AUTH_TOKEN must be set " +
+        "as Pages environment variables. Locally, put them in serving/dashboard/.dev.vars " +
+        "(gitignored).",
     );
   }
 
-  cached = createClient({ url, authToken });
+  cached = createClient({ url, authToken: token });
   return cached;
 }
 

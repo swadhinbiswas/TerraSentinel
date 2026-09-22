@@ -47,9 +47,18 @@ LOGGER = logging.getLogger("terrasentinel.sync")
 
 WORKFLOW = "transform"
 
-#: Gold tables to publish to the serving database, with their natural primary keys.
-#: The key must be what makes a row unique in the mart — the dbt `unique_combination_of_columns`
-#: tests assert exactly these, so a drift between the two shows up as a failing test.
+#: Gold tables to publish to the serving database, with their upsert keys.
+#:
+#: These keys must identify exactly one row per mart — an upsert keyed on anything
+#: narrower silently overwrites a distinct row. dbt asserts the same fact from the other
+#: side, with `unique_combination_of_columns` in ``transform/models/marts/_marts.yml``,
+#: so the two definitions have to stay compatible: **the key here may be a superset of
+#: dbt's, never a subset.** (A superset of a unique key is still unique; a subset is
+#: not.) The one superset today is `gold_h3_fire`, keyed by three columns here against
+#: dbt's two, because its `metric_type` is the constant `'fire_detection_count'`.
+#: `tests/test_sync_turso.py` parses the dbt yml and enforces the relationship, because
+#: nothing else would notice the two drifting apart: dbt only sees the mart, and the sync
+#: only sees its own key.
 GOLD_TABLES: dict[str, list[str]] = {
     # Each mart depends on exactly one source, so a source outage removes only its own
     # table rather than blanking a combined one.

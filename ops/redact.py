@@ -36,12 +36,14 @@ SECRET_ENV_VARS: tuple[str, ...] = (
     "HF_TOKEN",
     "FIRMS_MAP_KEY",
     "TURSO_AUTH_TOKEN",
+    "TURSO_TOKEN_RO",
     "ALERT_WEBHOOK_URL",
     "GEE_SERVICE_ACCOUNT_JSON",
     "GEE_SERVICE_ACCOUNT_EMAIL",
     "CLOUDFLARE_API_TOKEN",
     "MLFLOW_TRACKING_PASSWORD",
     "AWS_SECRET_ACCESS_KEY",
+    "ENTSOE_API_KEY",
 )
 
 #: Shape-based rules: catch credentials we were never handed directly.
@@ -56,10 +58,13 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"https://hooks\.slack\.com/services/\S+"), REDACTED),
     # Discord incoming webhooks
     (re.compile(r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\S+"), REDACTED),
-    # Generic sensitive query parameters
+    # Generic sensitive query parameters. `security[_-]?token` has to be named
+    # explicitly: the bare `token` alternative cannot match inside
+    # `securityToken=` because \b sits between "security" and "Token", where
+    # there is no word boundary.
     (
         re.compile(
-            r"(?i)\b(api[_-]?key|map[_-]?key|token|auth|password|secret|access[_-]?key)"
+            r"(?i)\b(api[_-]?key|map[_-]?key|security[_-]?token|token|auth|password|secret|access[_-]?key)"
             r"(=|%3D)([^&\s\"']{4,})"
         ),
         lambda match: f"{match.group(1)}{match.group(2)}{REDACTED}",  # type: ignore[arg-type]

@@ -62,8 +62,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
-      - run: uv pip install --system -e .
+          cache-dependency-glob: "requirements/*.lock"
+      - run: uv pip install --system --no-deps -r requirements/base.lock -e .
       - name: Plan
         run: |
           python -m collectors.backfill_historical \
@@ -82,7 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: [firms, sentinel, noaa_nsidc]
+        source: [firms, sentinel, noaa_nsidc, entsoe]
     steps:
       - name: Skip sources that were not requested
         id: gate
@@ -110,16 +110,17 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         with:
           enable-cache: true
+          cache-dependency-glob: "requirements/*.lock"
 
       - name: Install
         if: steps.gate.outputs.enabled == 'true'
         run: |
           case "${{ matrix.source }}" in
-            sentinel)   EXTRAS="[gee]" ;;
-            noaa_nsidc) EXTRAS="[noaa]" ;;
-            *)          EXTRAS="" ;;
+            sentinel)   LOCK=gee.lock ;;
+            noaa_nsidc) LOCK=noaa.lock ;;
+            *)          LOCK=base.lock ;;
           esac
-          uv pip install --system -e ".${EXTRAS}"
+          uv pip install --system --no-deps -r "requirements/$LOCK" -e .
 
       - name: Materialise GEE service account
         if: steps.gate.outputs.enabled == 'true' && matrix.source == 'sentinel'
@@ -142,6 +143,7 @@ jobs:
           FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
           GEE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GEE_SERVICE_ACCOUNT_EMAIL }}
           GEE_PROJECT: ${{ secrets.GEE_PROJECT }}
+          ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
@@ -171,7 +173,7 @@ jobs:
         env:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: |
-          python -m pip install --quiet --disable-pip-version-check requests
+          python -m pip install --quiet --disable-pip-version-check requests==2.34.2
           python -m ops.notify \
             --message "backfill_historical failed for ${{ matrix.source }}" \
             --context '{"source":"${{ matrix.source }}","regions":"${{ inputs.regions }}"}'

@@ -27,3 +27,20 @@ terrasentinel:
         # Keep memory bounded so the same profile works on a 7GB Actions runner.
         memory_limit: "2GB"
         preserve_insertion_order: false
+
+    # Databricks Workflows (databricks/jobs/run_dbt.py): identical engine and
+    # tuning to `dev` — only the database file's location differs. The DuckDB
+    # file lives on a Unity Catalog Volume so both tasks of the transform job
+    # (run_dbt writes it, merge_gold reads it) see the same path; the bundle
+    # sets DATABRICKS_DUCKDB_PATH from its uc_catalog/uc_schema/pipeline vars,
+    # and the default below is those variables' default value.
+    databricks:
+      type: duckdb
+      path: "{{ env_var('DATABRICKS_DUCKDB_PATH', '/Volumes/terrasentinel/gold/pipeline/terrasentinel.duckdb') }}"
+      schema: main
+      threads: 4
+      extensions:
+        - httpfs
+      settings:
+        memory_limit: "2GB"
+        preserve_insertion_order: false

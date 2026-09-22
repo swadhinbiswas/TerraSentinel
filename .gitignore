@@ -48,8 +48,17 @@ serving/dashboard/dist/
 serving/dashboard/.astro/
 serving/dashboard/.wrangler/
 
+# --- databricks -----------------------------------------------------------
+# The full deployment guideline is a working document: it changes with every
+# bundle/CLI revision and is deliberately kept out of git. The committed
+# summary + ADR live in databricks/README.md.
+databricks/docs/
+
 # --- editors / os --------------------------------------------------------
 .DS_Store
 .idea/
 .vscode/
 *.swp
+
+# stray agent-tooling artifacts
+.commandcode/

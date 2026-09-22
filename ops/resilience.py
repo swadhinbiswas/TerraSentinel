@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 __all__ = [
     "CircuitBreaker",
@@ -131,7 +131,13 @@ class RetryPolicy:
         )
 
 
-def retry_call[T](
+#: Kept as a TypeVar (not ``def retry_call[T]``) so this module parses on
+#: Python 3.11: Databricks Runtime 15.4 — the default bundle target — ships
+#: 3.11, and a SyntaxError here would take every cluster task down at import.
+T = TypeVar("T")
+
+
+def retry_call(  # noqa: UP047 — TypeVar on purpose: PEP 695 needs Python 3.12, see T above
     fn: Callable[[], T],
     *,
     policy: RetryPolicy | None = None,
@@ -283,7 +289,9 @@ class CircuitBreaker:
                 self._state = BreakerState.OPEN
                 self._opened_at = self.clock()
 
-    def call[T](self, fn: Callable[[], T], *, description: str = "") -> T:
+    def call(  # noqa: UP047 — same Python 3.11 constraint as retry_call above
+        self, fn: Callable[[], T], *, description: str = ""
+    ) -> T:
         label = description or self.name
         if not self.allow():
             raise CircuitBreakerOpen(

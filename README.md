@@ -1,7 +1,7 @@
 # TerraSentinel
 
-Anomaly detection on free public satellite and sensor data — wildfire, deforestation and
-glacier/ice melt — running end to end on free tiers. Ingestion, a versioned data lake,
+Anomaly detection on free public satellite and sensor data (wildfire, deforestation,
+glacier and ice melt), running end to end on free tiers. Ingestion, a versioned data lake,
 SQL transforms, unsupervised ML, and an edge-served dashboard.
 
 **Cost: $0.** GitHub Actions does the compute, Hugging Face Hub stores the lake and the
@@ -11,38 +11,49 @@ model registry, Turso serves the gold tables, Cloudflare Pages serves the dashbo
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 | Historical backfill (FIRMS, Sentinel, NOAA/NSIDC) → HF bronze | NOAA/NSIDC **done for real**; FIRMS/GEE awaiting keys |
+| 0 | Historical backfill (FIRMS, Sentinel, NOAA/NSIDC) → HF bronze | NOAA/NSIDC + FIRMS **live** on schedule; GEE awaiting service-account key |
 | 1 | FIRMS → bronze → dbt staging → Turso → one API route | collectors + staging + sync done; API route pending |
 | 2 | Sentinel (GEE) + NOAA/NSIDC collectors, unified silver contract | collectors done |
-| 3 | dbt staging/intermediate/gold + automated Turso sync | **done** — 117 nodes, all tests green |
+| 3 | dbt staging/intermediate/gold + automated Turso sync | **done**: 117 nodes, all tests green |
 | 4 | Feature table, IsolationForest, MLflow, HF model registry, batch scoring | **done** |
 | 5 | Known-events validation + synthetic anomaly injection in CI | **done** |
-| 6 | Astro + shadcn/ui dashboard on Cloudflare Pages | **deployed** — https://terrasentinel-dashboard.pages.dev |
+| 6 | Astro + shadcn/ui dashboard on Cloudflare Pages | **deployed**: https://terrasentinel-dashboard.pages.dev |
 | 7 | Evidently drift check → auto-retrain, alerting on every workflow | alerting done; drift pending |
 | 8 | Architecture decision records | written, folded into Design decisions below |
+| 9 | ENTSO-E day-ahead price + actual load (4th source) | collector **done**; bronze only, no dbt staging model |
+| 10 | Databricks hybrid path (Asset Bundle, Unity Catalog, Workflows, MLflow) | scaffolded + tested; free-tier path stays primary |
 
-`497` unit tests, a full dbt build, and a type-checked dashboard build, all offline. The transform layer runs against a
-synthetic lake with deliberately injected anomalies, and CI asserts the gold marts actually
-flag them — see "Proving it works" below.
+`592` unit tests, a full dbt build, and a type-checked dashboard build, all offline. The
+transform layer runs against a synthetic lake with deliberately injected anomalies, and CI
+asserts the gold marts actually flag them; see "Proving it works" below.
 
-**Live:** [terrasentinel-dashboard.pages.dev](https://terrasentinel-dashboard.pages.dev) — 8 pages
-on Cloudflare's edge, reading Turso directly from workerd with no backend service in between.
+**Pipeline health:** the scheduled runs are green: collect writes hundreds of rows a run,
+the transform publishes tens of thousands, and every dashboard API route answers from
+Turso. `collect sentinel` skips with a notice until the `GEE_SERVICE_ACCOUNT_JSON` GitHub
+secret is provisioned, so a red run always means a real breakage.
 
-**Serving database live:** 76,387 rows synced into Turso
-(`terra-globalopenresearch`, ap-south-1) — four gold marts plus 1,460 model predictions.
+**Live:** [terrasentinel-dashboard.pages.dev](https://terrasentinel-dashboard.pages.dev).
+8 pages on Cloudflare's edge that read Turso directly from workerd, with no backend service
+in between.
+
+**Serving database live:** 76,607 rows synced into Turso
+(`terra-globalopenresearch`, ap-south-1): four gold marts plus 1,462 model predictions.
 The dashboard reads it at sub-10 ms through Pages Functions.
 
-**Model published:** [`swadhinbiswas/TerraSentinel-models`](https://huggingface.co/swadhinbiswas/TerraSentinel-models)
-— an IsolationForest on 27 strictly causal features, traced to bronze commit `445d10f3`.
-Its card records a measured limitation rather than hiding it: at the serving threshold its
-flagged slice is *identical* to the statistical rule's (37/37 days, Jaccard 1.0), because
-the top 2.5% of fire days are ~20× the rest and therefore trivially separable.
+**Model published:** [`swadhinbiswas/TerraSentinel-models`](https://huggingface.co/swadhinbiswas/TerraSentinel-models),
+an IsolationForest on 27 strictly causal features traced to bronze commit `445d10f3`. The
+card measures instead of asserting: model flags are compared against the *independent*
+median/MAD rule in `gold_fire_anomalies.is_anomaly`, and precision, reference recall and
+Jaccard are printed for that comparison. The "adds **no information**" limitation appears
+only when that agreement is measured as total (precision and Jaccard both ≥ 0.99);
+otherwise the card reports the real overlap and names the reference rule. When the
+limitation holds, the card gives the reason too: the top 2.5% of fire days run ~20× the
+rest, so they are trivially separable and every method finds the same ones.
 
 **Live as of this run:** 55,677 real NOAA/NSIDC rows landed in
 [`swadhinbiswas/TerraSentinel`](https://huggingface.co/datasets/swadhinbiswas/TerraSentinel)
 in a single commit, and the transform read them back off the Hub. Arctic sea-ice extent in
-June 2026 is running **~1.3 × 10⁶ km² below the 1981–2010 normal (z ≈ −3.3)** — a real
-result from real data.
+June 2026 is running ~1.3 × 10⁶ km² below the 1981-2010 normal (z ≈ −3.3).
 
 ## Storage layout
 
@@ -50,7 +61,7 @@ Two repos, both under the same namespace:
 
 | Repo | Type | Holds |
 |---|---|---|
-| `<namespace>/TerraSentinel` | dataset | the bronze lake: `firms/`, `sentinel/`, `noaa_nsidc/`, `backfill/`, `ops/` |
+| `<namespace>/TerraSentinel` | dataset | the bronze lake: `firms/`, `sentinel/`, `noaa_nsidc/`, `entsoe/`, `backfill/`, `ops/` |
 | `<namespace>/TerraSentinel-models` | model | model registry (Phase 4) |
 
 **Why dataset repos and not buckets.** The spec requires MLflow to log the exact dataset
@@ -68,7 +79,7 @@ the Hub and model cards and revisions are model-repo features.
 
 **Reading the lake needs authentication.** DuckDB's `hf://` filesystem goes out anonymously
 unless a `HUGGINGFACE` secret exists, and anonymous reads share the Hub's public rate-limit
-pool — a scheduled job will hit HTTP 429 on the repo tree API.
+pool. A scheduled job will hit HTTP 429 on the repo tree API.
 `tools/configure_duckdb_secret` registers it, deliberately *outside* dbt so the token never
 reaches compiled SQL or an uploaded artifact.
 
@@ -77,7 +88,8 @@ reaches compiled SQL or an uploaded artifact.
 ```
 NASA FIRMS ─┐
 Sentinel-2/1 (GEE) ─┼─► collectors ─► HF bronze (parquet, versioned)
-NOAA / NSIDC ─┘                        │
+NOAA / NSIDC ─┤                        │
+ENTSO-E ─┘                             │
                                        ├─► dbt + DuckDB ─► gold marts ─► Turso (libSQL)
                                        │                                   │
                                        └─► features ─► unsupervised ML ────┤
@@ -86,10 +98,10 @@ NOAA / NSIDC ─┘                        │
                                                                    (Cloudflare Pages)
 ```
 
-There is deliberately **no live Python inference on the request path**. Batch scoring applies
-the registered model to the latest gold features and writes `anomaly_score` into Turso as part
-of the scheduled job; the dashboard's API routes only ever do a fast SQL read. That is what
-keeps the edge functions inside Cloudflare's CPU budget and the dashboard fast.
+**No live Python inference runs on the request path.** Batch scoring applies the
+registered model to the latest gold features and writes `anomaly_score` into Turso as part
+of the scheduled job; the dashboard's API routes only ever do a fast SQL read, which keeps
+the edge functions inside Cloudflare's CPU budget and the dashboard fast.
 
 ### The transform layer
 
@@ -114,17 +126,17 @@ bronze (parquet on HF, read directly over https)
 ```
 
 **Why one mart per source arm.** A dbt union requires every input to exist, so a
-combined "all ice" mart meant a missing Sentinel source also removed the sea-ice results —
+combined "all ice" mart meant a missing Sentinel source also removed the sea-ice results,
 data that was present, healthy, and unrelated to Sentinel. The same applied to a single
 combined map mart. Splitting them means an outage can only remove its own table, and the
 dashboard reads whichever exist.
 
-The transform **mirrors the lake locally first** (`tools/sync_bronze.py`: one listing
-plus parallel CDN fetches — 102 files / 8.8 MB / 18 s measured), then builds entirely
+The transform mirrors the lake locally first (`tools/sync_bronze.py`: one listing
+plus parallel CDN fetches, 102 files / 8.8 MB / 18 s measured), then builds entirely
 off local disk. DuckDB's `hf://` filesystem re-lists the repo tree on every query that
 touches a remote path, which is fine for a notebook and fatal for a scheduled build:
 with staging as views, ~50 dbt tests meant 50+ tree listings against a
-1,000-per-5-minutes API quota. After mirroring, a full 117-node build makes **zero** API
+1,000-per-5-minutes API quota. After mirroring, a full 117-node build makes zero API
 calls and runs in ~4 seconds.
 
 *Which* globs dbt reads is still decided outside dbt by `tools/bronze_manifest.py`. That indirection exists
@@ -135,25 +147,25 @@ local filesystem. So the listing happens once, authenticated and retried, and db
 only globs known to match. A source with no files at all fails its own branch with a relation
 named `bronze_missing_for__<source>__run_backfill_historical_then_rerun`.
 
-Partitioning is switched **off** when reading: live and backfill landings have different hive
+Partitioning is switched off when reading: live and backfill landings have different hive
 key sets (only live paths carry `day=`) and DuckDB refuses to read both in one call. Nothing is
-lost, because `region_id` is a real column on every row — which also decouples the models from
+lost, because `region_id` is a real column on every row, which also decouples the models from
 the physical layout entirely.
 
 ## Anomaly definitions
 
-Stated explicitly rather than buried, because "anomaly" is the whole product:
+Every mart states its baseline, because "anomaly" is the whole product:
 
 | Mart | Signal | Compared against |
 |---|---|---|
 | `gold_fire_anomalies` | daily detection count | median of the same ±15 days across years, scaled MAD as the yardstick |
 | `gold_deforestation_index` | monthly NDVI | the same month a year earlier; z-score against that region's own change distribution |
-| `gold_ice_melt_trends` (extent) | daily sea-ice extent | the published NSIDC 1981–2010 per-day normal and its standard deviation |
-| `gold_ice_melt_trends` (SAR) | monthly backscatter | year-over-year change distribution (no climatology exists; `baseline_source` says so) |
+| `gold_ice_extent_trends` (extent) | daily sea-ice extent | the published NSIDC 1981-2010 per-day normal and its standard deviation |
+| `gold_glacier_backscatter` (SAR) | monthly backscatter | year-over-year change distribution (no climatology exists; `baseline_source` says so) |
 
 Two choices are worth calling out. **Median/MAD, not mean/stddev**, for fire: a large fire
 sits inside its own baseline window, and with mean/stddev it inflates the very yardstick it is
-measured against — partly hiding itself. **A ±15-day pooled window, not "same date last
+measured against, partly hiding itself. **A ±15-day pooled window, not "same date last
 year"**: with two years of history, a same-date baseline has a sample size of two.
 
 ### The ML layer
@@ -171,9 +183,9 @@ gold_fire_anomalies ─► build_feature_table ─► train_isolation_forest ─
 Three properties are load-bearing:
 
 - **Every feature is causal.** Rolling windows end at `1 preceding`, so no feature can see
-  the day it scores. The statistical `zscore` is deliberately *not* a feature — it is
-  computed from the whole history including the future, and using it would make the
-  comparison between model and rule circular.
+  the day it scores. The statistical `zscore` is excluded as a feature because it is
+  computed from the whole history including the future; using it would make the comparison
+  between model and rule circular.
 - **The score is a percentile**, ranked against the training distribution stored in the
   bundle, so "0.98" means the same thing at serving time as it did at training time.
 - **Evaluation reports what is measurable without labels**: distribution shape, separation
@@ -194,23 +206,22 @@ serving/dashboard/   Astro + React islands + Tailwind, deployed to Cloudflare Pa
                          ExplorerTable, SqlConsole
 ```
 
-Eight pages: **Overview** · **Analysis** · **Stories** · **Catalog** · **Explorer** · **SQL** ·
-**Ops** · **Docs**.
+Eight pages: Overview · Analysis · Stories · Catalog · Explorer · SQL · Ops · Docs.
 
 ### UI decisions that were forced by bugs
 
-Three things about this UI are the way they are because the obvious version did not work:
+Four things about this UI are the way they are because the obvious version did not work:
 
 **The charts are hand-rolled SVG, not a charting library.** Recharts failed three separate
 ways: v2 predates React 19, v3 mis-measured its container (rendering squashed into a
 corner), and an island that fails to hydrate renders *nothing*. For one area series, one
-bar series and two lines, computed SVG paths render **on the server** — so the first paint
+bar series and two lines, computed SVG paths render on the server, so the first paint
 contains the chart, a JS failure cannot blank the panel, and 395 KB of gzipped dependency
 disappeared. Tooltips are `<title>` elements: native, keyboard-accessible, no JavaScript.
 
 **The map uses dual encoding (dots *and* hexagons).** Measured: an H3 res-7 cell is ~1.1 km
-across, which is **0.23 px at zoom 5** and still under 4 px at zoom 9. Drawing only
-polygons means the map looks empty at every zoom a region-wide view needs — which is
+across, which is 0.23 px at zoom 5 and still under 4 px at zoom 9. Drawing only
+polygons means the map looks empty at every zoom a region-wide view needs, which is
 exactly how it shipped once. Dots have a pixel-radius floor and are always visible;
 hexagon boundaries appear from zoom 7 where the shape is legible.
 
@@ -220,17 +231,18 @@ holding 4,392 of them, for exactly that reason. Framing is now instantaneous and
 `ResizeObserver` on the container, because the container has no size until the stylesheet
 gives the grid its columns.
 
-**The colour ramp varies in luminance, not hue.** A red→green severity scale is invisible to
-the ~8% of men with red-green deficiency, and red-green is the obvious choice for severity.
+**The colour ramp varies in luminance, not hue.** A red-to-green severity scale is invisible
+to the ~8% of men with red-green deficiency, and red-green is the obvious choice for severity.
 `--color-i1`..`--color-i5` run from a deep ember to near-white, and every value is also
-labelled in text — colour is a redundant channel, never the only one.
+labelled in text, so colour is always a redundant channel.
 
 Two accessibility details that cost nothing: focus rings are never suppressed, and
 `prefers-reduced-motion` is honoured rather than overridden.
 
-Four API routes, all single indexed reads against precomputed tables. Nothing on the
-request path aggregates, loads a model, or infers — that work happens in scheduled
-GitHub Actions jobs, because Pages Functions have a short CPU budget on the free tier.
+Seven API routes: every one is read-only, and everything it touches is precomputed.
+Nothing in the built-in views aggregates, loads a model, or infers; that work happens in
+scheduled GitHub Actions jobs, because Pages Functions have a short CPU budget on the free
+tier.
 
 Three deliberate choices:
 
@@ -278,8 +290,8 @@ python -m tools.assert_anomalies_detected --duckdb-path transform/terrasentinel.
 
 The generator plants one grossly obvious event per anomaly type (a 60-detection fire day, a
 0.35 NDVI collapse, a 1.8 × 10⁶ km² sea-ice excursion, a 3 °C marine heatwave). The checker
-asserts each is flagged **and** that the overall flag rate stays under 2% — because a
-degenerate baseline that flags everything would sail past a naive sensitivity check. CI runs
+asserts each is flagged and that the overall flag rate stays under 2%: a degenerate baseline
+that flags everything would sail past a naive sensitivity check. CI runs
 exactly this. The last run: fire z=16.9 extreme, NDVI z=-3.1 high, ice z=-4.3 extreme, fire
 flag rate 0.62%.
 
@@ -296,16 +308,24 @@ ops/             alerting, run metadata, redaction, resilience
 serving/         Astro dashboard (Phase 6)
 pandera_schemas/ the data contracts between layers
 tools/           synthetic lake generator, seed export, anomaly assertions
-tests/           357 tests plus a full dbt build, all offline
+tests/           592 tests plus a full dbt build, all offline
 ```
 
 ## Setup
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install -e ".[dev]"          # Python 3.12 pinned: GEE and torch lag newer releases
+source .venv/bin/activate
+# install the pinned dependency set (requirements/*.lock) plus this package
+uv pip install --no-deps -r requirements/ci.lock -e .
 cp .env.example .env                # fill in credentials (never committed)
 ```
+
+Python 3.12 is pinned: GEE and torch lag newer releases. Installing from a lock is the
+default because it is reproducible: `uv pip install -e ".[dev]"` still works but resolves
+whatever PyPI has *today*. Recompile the locks whenever `pyproject.toml` changes;
+`requirements/README.md` has the six commands, and `tests/test_workflows.py` fails if CI
+installs from anywhere else.
 
 Optional extras: `[gee]` Sentinel via Earth Engine, `[noaa]` OPeNDAP, `[transform]` dbt+DuckDB,
 `[ml]` scikit-learn, `[drift]` Evidently.
@@ -315,14 +335,30 @@ Optional extras: `[gee]` Sentinel via Earth Engine, `[noaa]` OPeNDAP, `[transfor
 | Variable | Needed for | Where to get it |
 |---|---|---|
 | `HF_TOKEN`, `HF_NAMESPACE`, `HF_PROJECT` | bronze/silver datasets, model registry | huggingface.co/settings/tokens |
-| `FIRMS_MAP_KEY` | fire detections | firms.modaps.eosdis.nasa.gov/api/map_key |
+| `FIRMS_MAP_KEY` | fire detections | firms.modaps.eosdis.nasa.gov/api/map/key |
 | `GEE_SERVICE_ACCOUNT_JSON` / `_EMAIL` / `GEE_PROJECT` | Sentinel-2/-1 | free for research; register a service account for Earth Engine |
-| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | gold/serving DB | turso.tech free tier |
+| `TURSO_DATABASE_URL`, `TURSO_TOKEN_RO` | gold/serving DB (read-only token) | turso.tech free tier |
+| `TURSO_AUTH_TOKEN` | same DB, write scope: pipeline upserts; fallback for the dashboard | turso.tech free tier |
 | `ALERT_WEBHOOK_URL` | failure alerts | Slack or Discord incoming webhook |
 
 NOAA and NSIDC need no credentials. Nothing reads a secret from anywhere but the
 environment, and everything that formats text for a human passes through `ops/redact.py`
-first — including URLs, because FIRMS puts its key in the request *path*.
+first, URLs included, because FIRMS puts its key in the request *path*.
+
+**Give the dashboard a read-only token.** Every statement the serving layer issues is a
+`SELECT`, so it has no business holding write scope: with a write token, a bug in the SQL
+console's guard would have write consequences.
+
+```bash
+turso db tokens create <db-name> --read-only
+# → set the value as TURSO_TOKEN_RO in Cloudflare Pages → Environment variables
+#   (and in serving/dashboard/.dev.vars for local dev), then revoke the write token:
+turso db tokens revoke <db-name> <token-name>
+```
+
+`turso()` prefers `TURSO_TOKEN_RO` and falls back to `TURSO_AUTH_TOKEN`, so rotation is an
+environment change with no deploy and no code path change; the SQL console reports the
+scope of whichever token it is actually using.
 
 ## Running
 
@@ -349,29 +385,29 @@ ruff check . && python -m pytest tests/ -q
 ```
 
 In production the transform job reads the lake straight from the Hub instead of a local
-directory — `--vars '{"bronze_root": "hf://datasets/swadhinbiswas/TerraSentinel"}'` — and CI
+directory (`--vars '{"bronze_root": "hf://datasets/swadhinbiswas/TerraSentinel"}'`); CI
 always runs the local form, so the same SQL is exercised with and without the network.
 
 dbt is invoked from the repository root with `--project-dir transform`, which keeps every
 relative path (and the DuckDB file) cwd-stable.
 
 `--plan` before `--backfill` is the intended workflow: a two-year FIRMS backfill is ~880
-requests, all three sources ~900.
+requests, all four sources ~1,160.
 
 ## Design decisions
 
-Nine choices here are not self-evident from the code. Each one names the measurement that
+Eleven choices here are not self-evident from the code. Each one names the measurement that
 forced it, because the reasoning is the part worth reading.
 
-**DuckDB over Spark.** Two years of three sources is 10⁵–10⁶ numeric rows. A cluster adds
+**DuckDB over Spark.** Two years of four sources is 10⁵-10⁶ numeric rows. A cluster adds
 cost and operational surface for no capability, and DuckDB reads the lake over HTTP with no
-staging step. Its limits are real — a process-per-job model, no libSQL adapter — and both
+staging step. Its limits are real (a process-per-job model, no libSQL adapter) and both
 are handled explicitly rather than hidden.
 
 **Turso over Postgres.** Pages Functions run in `workerd`, which cannot open a raw TCP
 connection. Reaching Postgres would need Hyperdrive or a proxy service on the request path.
 libSQL's HTTP protocol works from `workerd`, from CPython, and from CI with the same request
-shape — one transport and one typing rule set across the sync job and the serving layer.
+shape: one transport and one typing rule set across the sync job and the serving layer.
 
 **H3 over raw lat/lon.** Grouping becomes string equality rather than a spatial join,
 resolutions nest for free, and proximity is a cheap k-ring. Resolution is chosen per source
@@ -390,17 +426,17 @@ Astro ships static HTML with two interactive islands, and Pages Functions read T
 directly with no backend service.
 
 **Two grains for Sentinel, not per-pixel H3.** Measured: bucketing Sentinel at res 7 means
-203,485 cells for Iberia and 677,760 for Norway — 200k+ polygons per `reduceRegions` call,
+203,485 cells for Iberia and 677,760 for Norway: 200k+ polygons per `reduceRegions` call,
 which no free Earth Engine quota absorbs. A region-grain series (one request for an entire
 multi-year backfill) plus a res-5 change map answers the same questions at a cost that runs.
 
 **OPeNDAP from NOAA PSL, not the obvious archive.** The documented ERDDAP endpoint redirects
-to a host that times out, and NCEI's OISST copy turned out to be a stale 2002–2011 slice.
+to a host that times out, and NCEI's OISST copy turned out to be a stale 2002-2011 slice.
 NSIDC had also moved v3.0 → v4.0. All three findings came from probing the archives rather
 than reading about them.
 
 **Bronze glob selection outside dbt.** Two globs (`<source>/**` plus `backfill/<source>/**`)
-die the moment one prefix is missing — which is exactly the state after a backfill. A single
+die the moment one prefix is missing, which is exactly the state after a backfill. A single
 leading `**` works over `hf://` but not on a local filesystem. So the listing happens once,
 authenticated, and dbt receives only globs known to match.
 
@@ -412,9 +448,21 @@ live API, with a fallback through the overlap.
 **Mirror the bronze lake before transforming.** DuckDB's `hf://` filesystem re-lists the repo
 tree on every query, so a build made dozens of API calls against a 1000-per-5-minutes quota.
 One listing plus parallel CDN fetches turns that into zero, and the build runs in seconds.
+
+**Databricks as a hybrid second path, not a migration.** The free-tier path (GitHub Actions →
+Cloudflare → HF → Turso) stays the primary and the tested one; Databricks only *adds* an
+Asset Bundle with a paused-by-default Workflows DAG, a `databricks` dbt target writing to a
+UC Volume, and MLflow registration. What forced "generated, not hand-written" for the Unity
+Catalog DDL and MERGE statements is the CI gate `python -m tools.export_uc_ddl --check`: the
+gold schema has exactly one source of truth (`GOLD_TABLES`), and any drift between a mart
+model and the committed `databricks/sql/gold_ddl.sql` fails the build before a Databricks
+job could ever see it. Handover is one commit: unpause the bundle jobs, pause their GitHub
+twins. See `databricks/README.md` for the ADR.
+
 ## Data attribution
 
 Fire data: NASA FIRMS (MODIS and VIIRS active fire products). Imagery: Copernicus Sentinel-2
 and Sentinel-1 (ESA), processed in Google Earth Engine. Ocean and ice data: NOAA OISST v2.1
-and NSIDC Sea Ice Index (v4.0). Attribution strings live in `collectors/config.py` and are
+and NSIDC Sea Ice Index (v4.0). Energy market data: ENTSO-E Transparency Platform (day-ahead
+prices A44, actual total load A65). Attribution strings live in `collectors/config.py` and are
 served to the dashboard from the `sources` table, so the footer cannot drift out of date.

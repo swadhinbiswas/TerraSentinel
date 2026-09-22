@@ -1,0 +1,324 @@
+# TerraSentinel Workflows DAG — one job per cadence, mirroring GitHub Actions.
+#
+# Cron parity is a tested contract (tests/test_databricks.py):
+#   collect_firms    0 15 */6 * * ?  = collect_data.yml `15 */6 * * *`
+#   collect_sentinel 0 30 3 * * ?    = collect_data.yml `30 3 * * *`
+#   collect_noaa     0 45 4 ? * MON  = collect_data.yml `45 4 * * 1`
+#   collect_entsoe   0 35 7 * * ?    = collect_data.yml `35 7 * * *`
+#   transform        0 30 5 * * ?    = transform.yml    `30 5 * * *`
+#   train            0 0 6 ? * MON   = train_model.yml  `0 6 * * 1`
+# (Quartz needs a seconds field and exactly one of day-of-month / day-of-week;
+# the GH-cron -> Quartz converter lives in the test.)
+#
+# Secrets are NOT referenced here. Task code reads credentials through
+# collectors.config.get_secret: environment first, then the secret scope named
+# by DATABRICKS_SECRET_SCOPE via dbutils (databricks/docs/05-secrets.md).
+# The pypi pins below must each appear verbatim in requirements/*.lock —
+# also a tested contract, so a lock bump fails CI until this file follows.
+#
+# Every schedule deploys PAUSED (presets.trigger_pause_status in
+# databricks.yml), so deploying is side-effect-free until you opt in.
+
+resources:
+  jobs:
+    # ---------------------------------------------------------------- collect
+    collect_firms:
+      name: terrasentinel-collect-firms
+      schedule:
+        quartz_cron_expression: "0 15 */6 * * ?" # GH: 15 */6 * * *
+        timezone_id: Etc/UTC
+      job_clusters:
+        - job_cluster_key: worker
+          new_cluster: &worker_cluster
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 0
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: local[*]
+            custom_tags:
+              ResourceClass: single-node
+            spark_env_vars: &repo_env
+              # Repo root synced by the bundle. Entry scripts resolve it from
+              # --repo-dir, then this env, then their own file location.
+              TERRASENTINEL_ROOT: ${workspace.file_path}
+              DATABRICKS_SECRET_SCOPE: ${var.secret_scope}
+              HF_NAMESPACE: ${var.hf_namespace}
+              DATABRICKS_DUCKDB_PATH: /Volumes/${var.uc_catalog}/${var.uc_schema}/pipeline/terrasentinel.duckdb
+              UC_CATALOG: ${var.uc_catalog}
+              UC_SCHEMA: ${var.uc_schema}
+      tasks:
+        - task_key: collect
+          job_cluster_key: worker
+          timeout_seconds: 3600
+          max_retries: 1
+          libraries: &core_libs
+            - pypi: &lib_pandas
+                package: pandas==2.3.3
+            - pypi: &lib_requests
+                package: requests==2.34.2
+            - pypi: &lib_pandera
+                package: pandera==0.33.1
+            - pypi: &lib_pyarrow
+                package: pyarrow==25.0.1
+            - pypi: &lib_h3
+                package: h3==4.5.0
+            - pypi: &lib_dotenv
+                package: python-dotenv==1.2.3
+            - pypi: &lib_hub
+                package: huggingface-hub==1.32.0
+          spark_python_task:
+            python_file: databricks/jobs/collect.py
+            parameters:
+              - --source
+              - firms
+
+    collect_sentinel:
+      name: terrasentinel-collect-sentinel
+      schedule:
+        quartz_cron_expression: "0 30 3 * * ?" # GH: 30 3 * * *
+        timezone_id: Etc/UTC
+      job_clusters:
+        - job_cluster_key: worker
+          new_cluster: *worker_cluster
+      tasks:
+        - task_key: collect
+          job_cluster_key: worker
+          timeout_seconds: 7200
+          max_retries: 1
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+            - pypi: &lib_earthengine
+                package: earthengine-api==1.7.45
+          spark_python_task:
+            python_file: databricks/jobs/collect.py
+            parameters:
+              - --source
+              - sentinel
+
+    collect_noaa_nsidc:
+      name: terrasentinel-collect-noaa-nsidc
+      schedule:
+        quartz_cron_expression: "0 45 4 ? * MON" # GH: 45 4 * * 1
+        timezone_id: Etc/UTC
+      job_clusters:
+        - job_cluster_key: worker
+          new_cluster: *worker_cluster
+      tasks:
+        - task_key: collect
+          job_cluster_key: worker
+          timeout_seconds: 7200
+          max_retries: 1
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+            - pypi: &lib_pydap
+                package: pydap==3.5.11
+          spark_python_task:
+            python_file: databricks/jobs/collect.py
+            parameters:
+              - --source
+              - noaa_nsidc
+
+    collect_entsoe:
+      name: terrasentinel-collect-entsoe
+      schedule:
+        quartz_cron_expression: "0 35 7 * * ?" # GH: 35 7 * * *
+        timezone_id: Etc/UTC
+      job_clusters:
+        - job_cluster_key: worker
+          new_cluster: *worker_cluster
+      tasks:
+        - task_key: collect
+          job_cluster_key: worker
+          # Two days of zones x documents, paced ~9.5s apart to stay under the
+          # platform's ~400 requests/hour quota: minutes of wall time, an hour
+          # of headroom.
+          timeout_seconds: 3600
+          max_retries: 1
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+          spark_python_task:
+            python_file: databricks/jobs/collect.py
+            parameters:
+              - --source
+              - entsoe
+
+    # ------------------------------------------------------------- transform
+    # Mirror the bronze lake, build the marts into the DuckDB file on the UC
+    # Volume (dbt target `databricks`), then merge writable columns into the
+    # Unity Catalog gold tables with the generated MERGE statements.
+    transform:
+      name: terrasentinel-transform
+      schedule:
+        quartz_cron_expression: "0 30 5 * * ?" # GH: 30 5 * * *
+        timezone_id: Etc/UTC
+      job_clusters:
+        - job_cluster_key: worker
+          new_cluster: *worker_cluster
+      tasks:
+        - task_key: run_dbt
+          job_cluster_key: worker
+          timeout_seconds: 9000
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+            - pypi: &lib_dbt_core
+                package: dbt-core==1.12.5
+            - pypi: &lib_dbt_duckdb
+                package: dbt-duckdb==1.11.0
+            - pypi: &lib_duckdb
+                package: duckdb==1.5.5
+          spark_python_task:
+            python_file: databricks/jobs/run_dbt.py
+            parameters:
+              - --target
+              - databricks
+        - task_key: merge_gold
+          job_cluster_key: worker
+          timeout_seconds: 3600
+          depends_on:
+            - task_key: run_dbt
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+            - *lib_duckdb
+          spark_python_task:
+            python_file: databricks/jobs/merge_gold.py
+            parameters:
+              - --role
+              - transform
+
+    # ------------------------------------------------------------------ ml
+    # feature build -> train (+ MLflow on the workspace) -> publish to the Hub
+    # registry -> batch score. Artifacts hand off through /tmp on the shared
+    # single-node cluster; the DuckDB file (features + gold) lives on the UC
+    # Volume written by the transform job.
+    train:
+      name: terrasentinel-train
+      schedule:
+        quartz_cron_expression: "0 0 6 ? * MON" # GH: 0 6 * * 1
+        timezone_id: Etc/UTC
+      job_clusters:
+        - job_cluster_key: worker
+          new_cluster: *worker_cluster
+      tasks:
+        - task_key: build_features
+          job_cluster_key: worker
+          timeout_seconds: 3600
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+            - *lib_duckdb
+          spark_python_task:
+            python_file: databricks/jobs/train.py
+            parameters:
+              - --stage
+              - features
+              - --kind
+              - fire
+        - task_key: train_model
+          job_cluster_key: worker
+          timeout_seconds: 7200
+          depends_on:
+            - task_key: build_features
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+            - *lib_duckdb
+            - pypi: &lib_sklearn
+                package: scikit-learn==1.9.1
+            - pypi: &lib_joblib
+                package: joblib==1.6.0
+            - pypi: &lib_numpy
+                package: numpy==2.5.3
+            - pypi: &lib_mlflow
+                package: mlflow==3.16.1
+          spark_python_task:
+            python_file: databricks/jobs/train.py
+            parameters:
+              - --stage
+              - train
+              - --out-dir
+              - /tmp/terrasentinel/ml/artifacts/isolation_forest_fire
+              - --mlflow-uri
+              - databricks
+        - task_key: register_model
+          job_cluster_key: worker
+          timeout_seconds: 1800
+          depends_on:
+            - task_key: train_model
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+          spark_python_task:
+            python_file: databricks/jobs/train.py
+            parameters:
+              - --stage
+              - register
+              - --bundle-dir
+              - /tmp/terrasentinel/ml/artifacts/isolation_forest_fire
+        - task_key: batch_score
+          job_cluster_key: worker
+          timeout_seconds: 3600
+          depends_on:
+            - task_key: register_model
+          libraries:
+            - *lib_pandas
+            - *lib_requests
+            - *lib_pandera
+            - *lib_pyarrow
+            - *lib_h3
+            - *lib_dotenv
+            - *lib_hub
+            - *lib_duckdb
+            - *lib_sklearn
+            - *lib_joblib
+            - *lib_numpy
+          spark_python_task:
+            python_file: databricks/jobs/batch_score.py
+            parameters:
+              - --out
+              - /tmp/terrasentinel/ml/artifacts/predictions.parquet

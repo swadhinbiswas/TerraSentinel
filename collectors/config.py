@@ -47,11 +47,48 @@ class MissingCredential(RuntimeError):
         )
 
 
+def _scope_value(name: str) -> str | None:
+    """Resolve ``name`` from the Databricks secret scope named in the environment.
+
+    Only reached when the environment itself is empty (see ``get_secret``), so
+    GitHub Actions and local ``.env`` runs never touch dbutils. Any failure —
+    no pyspark, no cluster, wrong scope, absent key — degrades to "missing"
+    rather than crashing a collector mid-run; the caller then raises the usual
+    ``MissingCredential``.
+    """
+    scope = (os.environ.get("DATABRICKS_SECRET_SCOPE") or "").strip()
+    if not scope:
+        return None
+    try:  # pragma: no cover - exercised in tests against a fake pyspark.dbutils
+        from pyspark.dbutils import DBUtils  # type: ignore[import-not-found]
+        from pyspark.sql import SparkSession  # type: ignore[import-not-found]
+
+        session = SparkSession.builder.getOrCreate()
+        try:
+            dbutils = DBUtils(session)
+        except TypeError:
+            # Some runtimes construct DBUtils from the SparkContext instead.
+            from pyspark import SparkContext  # type: ignore[import-not-found]
+
+            dbutils = DBUtils(SparkContext.getOrCreate())
+        value = str(dbutils.secrets.get(scope=scope, key=name)).strip()
+    except Exception:
+        return None
+    return value or None
+
+
 def get_secret(name: str, *, required: bool = True) -> str | None:
-    """Read a credential from the environment without ever leaking its value."""
-    value = os.environ.get(name)
-    if value is not None:
-        value = value.strip()
+    """Read a credential without ever leaking its value.
+
+    Environment first — GitHub Actions secrets, local ``.env``, explicit
+    exports — then, when ``DATABRICKS_SECRET_SCOPE`` is set, that Databricks
+    secret scope via dbutils. The bundle syncs no ``.env`` into the workspace,
+    so jobs on a job cluster resolve their credentials through the scope; the
+    same code path stays a plain environment read everywhere else.
+    """
+    value = (os.environ.get(name) or "").strip()
+    if not value:
+        value = _scope_value(name) or ""
     if not value:
         if required:
             raise MissingCredential([name])
@@ -61,15 +98,22 @@ def get_secret(name: str, *, required: bool = True) -> str | None:
 
 def require_secrets(names: Sequence[str]) -> dict[str, str]:
     """Read several credentials at once, reporting every missing name together."""
-    missing = [name for name in names if not (os.environ.get(name) or "").strip()]
+    resolved: dict[str, str] = {}
+    missing: list[str] = []
+    for name in names:
+        value = get_secret(name, required=False)
+        if value is None:
+            missing.append(name)
+        else:
+            resolved[name] = value
     if missing:
         raise MissingCredential(missing)
-    return {name: get_secret(name) for name in names}  # type: ignore[misc]
+    return resolved
 
 
 def secret_status(names: Sequence[str]) -> dict[str, str]:
     """Return ``{"HF_TOKEN": "set", ...}`` — safe to log and store."""
-    return {name: ("set" if (os.environ.get(name) or "").strip() else "missing") for name in names}
+    return {name: ("set" if get_secret(name, required=False) else "missing") for name in names}
 
 
 # --------------------------------------------------------------------------
@@ -357,6 +401,38 @@ SOURCES: dict[str, SourceSpec] = {
             "hemispheric sea-ice extent from the NSIDC daily series, and the "
             "static 1981-2010 NSIDC climatology used as the seasonal baseline. "
             "Both archives are keyless public HTTPS; weekly cadence is sufficient."
+        ),
+    ),
+    "entsoe": SourceSpec(
+        source_id="entsoe",
+        label="ENTSO-E day-ahead electricity price + actual load",
+        metric_types=("day_ahead_price", "actual_load"),
+        anomaly_types=("fire", "deforestation", "ice"),
+        h3_resolution=7,
+        cadence_cron="35 7 * * *",
+        cadence_human="daily",
+        live_products=("A44_day_ahead_price", "A65_actual_load"),
+        backfill_products=("A44_day_ahead_price", "A65_actual_load"),
+        required_secrets=("ENTSOE_API_KEY",),
+        attribution=(
+            "Energy market data: ENTSO-E Transparency Platform "
+            "(day-ahead prices A44, actual total load A65)."
+        ),
+        docs_url="https://transparency.entsoe.eu/",
+        notes=(
+            "Two documents per bidding zone: day-ahead price (A44/A01) and actual "
+            "total load (A65/A16), both quarter-hourly. Zones map to study regions "
+            "by bbox centre: GR->greece_fire, ES+PT->iberia_fire, RO->"
+            "carpathian_deforest, AT->alps_ice, NO->norway_ice; FR/DE/IT zones exist "
+            "on the platform but have no study region whose bbox contains them, so "
+            "they are deliberately unmapped. Rows carry spatial_scope="
+            "'bidding_zone' and the zone_code, because a whole-zone aggregate "
+            "attributed to a region centre is an anchor, not a measurement point. "
+            "The platform quotas roughly 400 requests/hour, so the collector paces "
+            "requests ~9.5s apart and backfills in calendar-month chunks; empty "
+            "windows come back as an acknowledgement document and count as empty, "
+            "not failure. Market days run 22:00Z-22:00Z, so adjacent chunks overlap "
+            "and fetched frames are de-duplicated."
         ),
     ),
 }

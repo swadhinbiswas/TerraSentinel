@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { runGuardedQuery } from "@/lib/queries";
 import { tableStatus } from "@/lib/registry";
 import { MAX_ROWS, tokenScope } from "@/lib/sql-guard";
-import { turso } from "@/lib/turso";
+import { authToken, turso } from "@/lib/turso";
 
 export const prerender = false;
 
@@ -14,9 +14,10 @@ export const GET: APIRoute = async ({ locals }) => {
   return Response.json({
     maxRows: MAX_ROWS,
     // Stated openly: the guard is the control on this route, and if the token is
-    // read-write then a bug in the guard has write consequences. A read-only token is
-    // the stronger fix and the console says so.
-    tokenScope: tokenScope(env.TURSO_AUTH_TOKEN),
+    // read-write then a bug in the guard has write consequences. The dashboard prefers a
+    // read-only token (`TURSO_TOKEN_RO`) precisely so that cannot happen; this reports
+    // the scope of whichever token the connection actually uses.
+    tokenScope: tokenScope(authToken(env)),
     tables: statuses.map((status: { name: string; title: string; present: boolean; rows: number | null; columns: string[] }) => ({
       name: status.name,
       title: status.title,

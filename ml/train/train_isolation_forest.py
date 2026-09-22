@@ -78,6 +78,20 @@ def train(
     matrix = features.reset_index(drop=True)
     scored = frame.loc[features.index].reset_index(drop=True)
 
+    # The reference for evaluation is the gold mart's own flag (median/MAD z >= 5),
+    # captured *before* `is_anomaly` is overwritten with the model's flags below.
+    # Passing the model's own flags here was a real bug: it made every agreement
+    # metric a constant 1.0 and the published claim built on them unfalsifiable.
+    if "is_anomaly" not in scored.columns:
+        raise KeyError(
+            "gold_fire_anomalies.is_anomaly is missing from the feature frame; it is the "
+            "reference the evaluation reports agreement against, so training refuses to "
+            "score itself against itself"
+        )
+    reference_flags = (
+        pd.to_numeric(scored["is_anomaly"], errors="coerce").fillna(0).astype(bool).to_numpy()
+    )
+
     model = IsolationForest(
         n_estimators=n_estimators,
         contamination=contamination,
@@ -96,12 +110,15 @@ def train(
         anomaly_score=raw_scores,
         anomaly_percentile=percentiles,
         is_anomaly=percentiles >= threshold,
+        # Kept beside the model's flag so the scored artifact can be inspected for how
+        # far the two disagree — which is the whole point of measuring agreement.
+        reference_is_anomaly=reference_flags,
     )
 
     report = evaluate(
         scored,
         scored["anomaly_score"].to_numpy(),
-        reference_flags=scored["is_anomaly"].to_numpy(),
+        reference_flags=reference_flags,
         value_column="detection_count",
         top_fraction=contamination,
     )
@@ -123,7 +140,7 @@ def train(
             "regions": sorted(scored["region_id"].unique().tolist()),
             "first_day": str(pd.to_datetime(scored["observation_date"]).min().date()),
             "last_day": str(pd.to_datetime(scored["observation_date"]).max().date()),
-            "reference_rule": "median/MAD z-score in gold.gold_fire_anomalies",
+            "reference_rule": "median/MAD z-score in gold.gold_fire_anomalies (is_anomaly, z >= 5)",
         },
         n_estimators=n_estimators,
         random_state=random_state,
@@ -135,6 +152,9 @@ def train(
             "known_event_pass_rate": float(known_event_pass_rate),
             "known_event_caught": float(sum(1 for outcome in events if outcome.passed)),
             "known_event_total": float(len(events)),
+            # Per-event outcomes, so the card lists what was measured rather than a
+            # hand-written summary that drifts from the run.
+            "known_events": [outcome.as_dict() for outcome in events],
         },
     )
 

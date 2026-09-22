@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Stat } from "@/components/ui/stat";
 import { Table, Td, Th } from "@/components/ui/table";
-import { anomalies, iceTrends, mapWindow } from "@/lib/queries";
+import { degraded, EMPTY_MAP_WINDOW, anomalies, iceTrends, mapWindow, safe } from "@/lib/queries";
 import { tableStatus } from "@/lib/registry";
 import { turso } from "@/lib/turso";
 import Layout from "@/layouts/Layout.astro";
@@ -17,14 +17,27 @@ export const prerender = false;
 const env = Astro.locals.runtime?.env ?? import.meta.env;
 const client = turso(env);
 
-const [fireRows, iceRows, fireWindow, statuses] = await Promise.all([
-  anomalies(client, { sinceDays: 400 }),
-  iceTrends(client, { sinceDays: 400 }),
+// Each query gets its own boundary: one broken table degrades one panel instead of
+// 500-ing the page (a `Promise.all` rejects on the first failure, which would take the
+// map, the chart and the coverage list down together).
+const [fire, ice, map, tables] = await Promise.all([
+  safe("Fire anomalies", () => anomalies(client, { sinceDays: 400 }), []),
+  safe("Ice trends", () => iceTrends(client, { sinceDays: 400 }), []),
   // A window anchored to the record's largest event, not to "recent": the anomalies are
   // historical, so a last-N-days default shows the quiet tail and no signal.
-  mapWindow(client, { layer: "fire", from: "2025-08-13", to: "2025-08-19" }),
-  tableStatus(client),
+  safe(
+    "Map window",
+    () => mapWindow(client, { layer: "fire", from: "2025-08-13", to: "2025-08-19" }),
+    EMPTY_MAP_WINDOW,
+  ),
+  safe("Table status", () => tableStatus(client), []),
 ]);
+
+const fireRows = fire.data;
+const iceRows = ice.data;
+const fireWindow = map.data;
+const statuses = tables.data;
+const problems = degraded([fire, ice, map, tables]);
 
 const exceptions = fireRows
   .filter((row) => row.is_anomaly === 1)
@@ -72,6 +85,22 @@ const domainCoverage = domains.map((domain) => {
 ---
 
 <Layout title="TerraSentinel — overview" description="Live anomaly detection over EU study regions.">
+  {problems.length > 0 && (
+    <section
+      role="alert"
+      class="mb-4 rounded border px-4 py-3 text-sm"
+      style="border-color: color-mix(in oklab, var(--color-i4) 55%, transparent); background: color-mix(in oklab, var(--color-i4) 10%, transparent);"
+    >
+      <p class="mb-1 font-medium">Some panels could not load</p>
+      <ul class="list-inside list-disc text-xs text-[var(--color-muted)]">
+        {problems.map((problem) => <li>{problem}</li>)}
+      </ul>
+      <p class="mt-1 text-xs text-[var(--color-muted)]">
+        The rest of the page is current; only the panels named above are missing.
+      </p>
+    </section>
+  )}
+
   <section class="mb-4">
     <ul class="flex flex-wrap gap-2 text-xs">
       {domainCoverage.map((item) => (

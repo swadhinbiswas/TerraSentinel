@@ -65,6 +65,59 @@ const EXPECTED_TABLES = [
   "gold_h3_sentinel",
 ] as const;
 
+/** One panel's data, or — when the query fails — the reason it is missing. */
+export interface PanelResult<T> {
+  data: T;
+  error: string | null;
+}
+
+/**
+ * Run one panel's query behind its own error boundary.
+ *
+ * `Promise.all` rejects on the first failure, so a single broken table — a mart that was
+ * never backfilled, a transient Turso error — 500s the entire page and takes down panels
+ * that were fine. Each panel gets a boundary instead: the failure comes back as a value,
+ * the page renders a banner naming it, and everything else still loads.
+ *
+ * The query arrives as a thunk so nothing starts executing before the boundary exists,
+ * and every caller passes a fallback of the right shape so the happy path is unchanged.
+ */
+export async function safe<T>(
+  label: string,
+  query: () => Promise<T>,
+  fallback: T,
+): Promise<PanelResult<T>> {
+  try {
+    return { data: await query(), error: null };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { data: fallback, error: `${label}: ${reason}` };
+  }
+}
+
+/** The failures worth telling the reader about, in panel order. */
+export function degraded(results: PanelResult<unknown>[]): string[] {
+  return results.flatMap((result) => (result.error ? [result.error] : []));
+}
+
+/** What a failed map panel renders with: the right shape, nothing to show. */
+export const EMPTY_MAP_WINDOW: MapWindow = {
+  layer: "fire",
+  from: "",
+  to: "",
+  mode: "all",
+  grain: "day",
+  coverage: { from: "", to: "" },
+  cells: [],
+  breaks: [],
+  domain: { min: 0, max: 0 },
+  totalCells: 0,
+  region: null,
+  peak: null,
+  activity: [],
+  truncated: false,
+};
+
 export async function tableExists(client: Client, table: string): Promise<boolean> {
   const result = await client.execute({
     sql: "select 1 as present from sqlite_master where type = 'table' and name = ? limit 1",
@@ -125,6 +178,23 @@ function windowModifier(sinceDays: unknown, fallback = 400): string {
   return `-${Math.abs(Math.trunc(days))} days`;
 }
 
+/** Widen a window to whole months, for a layer stamped at monthly grain.
+ *
+ * An SST cell carries the first of its month, so a preset like `2025-08-13 → 2025-08-19`
+ * contains no month boundary at all and selects zero rows — silently, because an empty
+ * result is not an error. Snapping outwards guarantees the nearest month is in frame and
+ * lets the UI state the layer's real resolution instead of implying daily data.
+ */
+function monthWindow(from: string, to: string): { from: string; to: string } {
+  const start = /^\d{4}-\d{2}/.test(from) ? `${from.slice(0, 7)}-01` : from;
+  const match = /^(\d{4})-(\d{2})/.exec(to);
+  if (!match) return { from: start, to };
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return { from: start, to };
+  const lastDay = new Date(Date.UTC(Number(match[1]), month, 0)).getUTCDate();
+  return { from: start, to: `${match[1]}-${match[2]}-${String(lastDay).padStart(2, "0")}` };
+}
+
 export async function iceTrends(
   client: Client,
   options: { sinceDays?: number } = {},
@@ -146,6 +216,14 @@ export interface MapWindow {
   from: string;
   to: string;
   mode: "all" | "anomalies";
+  /** Grain of `period_start` for this layer: fire cells are stamped with an observation
+   *  day, SST cells with the first of the month they summarise. The UI has to say which,
+   *  because a "window" means very different things at the two grains. */
+  grain: "day" | "month";
+  /** Full span the layer actually holds, whatever window was asked for. The SST mart
+   *  currently covers four months, and a window outside them comes back empty for a
+   *  reason no other field reveals — the empty state has to be able to say so. */
+  coverage: { from: string; to: string };
   cells: MapCell[];
   /** Quantile breaks of the visible values, so the legend can be data-driven rather
    *  than hardcoded. A fixed 1/10/100/1000 scale renders a typical cell (value ~3) as
@@ -183,16 +261,28 @@ export async function mapWindow(
   const table = layer === "sst" ? "gold_h3_sst" : "gold_h3_fire";
   const limit = Math.min(Math.max(options.limit ?? 6000, 1), 20000);
   const mode = options.mode === "anomalies" ? "anomalies" : "all";
+  // The two layers are not the same shape: a fire cell is stamped with its observation
+  // day, an SST cell with the first of the month it summarises (period_grain = 'month'
+  // in the mart). Anything that compares a cell's period to a calendar date has to work
+  // at the layer's own grain, or the comparison silently matches nothing — the old
+  // daily join returned 56 SST rows where the monthly one returns 220.
+  const grain: MapWindow["grain"] = layer === "sst" ? "month" : "day";
 
   const bounds = await client.execute(`select min(period_start) as lo, max(period_start) as hi from ${table}`);
-  const from = options.from ?? String(bounds.rows[0]?.lo ?? "1970-01-01").slice(0, 10);
-  const to = options.to ?? String(bounds.rows[0]?.hi ?? "2100-01-01").slice(0, 10);
+  const rawFrom = options.from ?? String(bounds.rows[0]?.lo ?? "1970-01-01").slice(0, 10);
+  const rawTo = options.to ?? String(bounds.rows[0]?.hi ?? "2100-01-01").slice(0, 10);
+  const { from, to } = grain === "month" ? monthWindow(rawFrom, rawTo) : { from: rawFrom, to: rawTo };
 
-  const anomalyJoin =
+  // An `exists`, not a join. A month holds many flagged days, and joining would return
+  // the cell once per matching day — inflating the cell page *and* the quantiles that
+  // drive the legend.
+  const flaggedDay = grain === "month" ? "strftime('%Y-%m-01', a.observation_date)" : "a.observation_date";
+  const anomalyFilter =
     mode === "anomalies"
-      ? `join gold_fire_anomalies a
-             on a.region_id = h.region_id and a.observation_date = h.period_start
-                and a.is_anomaly = 1`
+      ? `and exists (select 1 from gold_fire_anomalies a
+                       where a.region_id = h.region_id
+                         and a.is_anomaly = 1
+                         and ${flaggedDay} = h.period_start)`
       : "";
 
   // Region scoping matters for legibility as much as for filtering: a window covering
@@ -205,8 +295,8 @@ export async function mapWindow(
   const cells = await client.execute({
     sql: `select h.h3_index, h.region_id, h.latitude, h.longitude, h.period_start,
                  h.metric_type, h.spatial_scope, h.value
-          from ${table} h ${anomalyJoin}
-          where h.period_start between ? and ? ${regionClause}
+          from ${table} h
+          where h.period_start between ? and ? ${regionClause} ${anomalyFilter}
           order by h.value desc
           limit ?`,
     args: [from, to, ...regionArgs, limit],
@@ -226,8 +316,8 @@ export async function mapWindow(
                  max(case when rn = cast(n * 0.98 as integer) + 1 then value end) as p98
           from (
             select h.value, row_number() over (order by h.value) as rn, count(*) over () as n
-            from ${table} h ${anomalyJoin}
-            where h.period_start between ? and ? ${regionClause}
+            from ${table} h
+            where h.period_start between ? and ? ${regionClause} ${anomalyFilter}
           )`,
     args: [from, to, ...regionArgs],
   });
@@ -245,8 +335,8 @@ export async function mapWindow(
 
   const activity = await client.execute({
     sql: `select h.period_start, count(*) as cells, max(h.value) as peak
-          from ${table} h ${anomalyJoin}
-          where h.period_start between ? and ? ${regionClause}
+          from ${table} h
+          where h.period_start between ? and ? ${regionClause} ${anomalyFilter}
           group by 1 order by 1`,
     args: [from, to, ...regionArgs],
   });
@@ -256,6 +346,11 @@ export async function mapWindow(
     from,
     to,
     mode,
+    grain,
+    coverage: {
+      from: String(bounds.rows[0]?.lo ?? "").slice(0, 10),
+      to: String(bounds.rows[0]?.hi ?? "").slice(0, 10),
+    },
     region: options.region ?? null,
     cells: rows,
     breaks,

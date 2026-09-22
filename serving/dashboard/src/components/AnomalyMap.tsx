@@ -346,7 +346,14 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
         <Tabs
           items={[
             { value: "all", label: "All cells" },
-            { value: "anomalies", label: "Anomalous days", hint: "Only cells on days the detector flagged" },
+            {
+              value: "anomalies",
+              label: data.grain === "month" ? "Anomalous months" : "Anomalous days",
+              hint:
+                data.grain === "month"
+                  ? "Only cells in months that contain a flagged day"
+                  : "Only cells on days the detector flagged",
+            },
           ]}
           value={mode}
           onChange={setMode}
@@ -354,8 +361,8 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
         <div className="ml-auto flex items-center gap-3 text-xs text-[var(--color-muted)]">
           <Tabs
             items={[
-              { value: "fire", label: LAYERS.fire, hint: "H3 res 7 · ~5 km²" },
-              { value: "sst", label: LAYERS.sst, hint: "H3 res 5 · ~253 km²" },
+              { value: "fire", label: LAYERS.fire, hint: "H3 res 7 · ~5 km² · daily" },
+              { value: "sst", label: LAYERS.sst, hint: "H3 res 5 · ~253 km² · monthly" },
             ]}
             value={layer}
             onChange={setLayer}
@@ -375,6 +382,12 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
         <span className="tabular-nums">
           {data.from} → {data.to}
         </span>
+        <span aria-hidden="true">·</span>
+        <span>
+          {data.grain === "month"
+            ? "monthly resolution — each cell is stamped with the first of its month"
+            : "daily resolution"}
+        </span>
         {peak && (
           <>
             <span aria-hidden="true">·</span>
@@ -391,23 +404,48 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
         {!hasCells && !loading && (
           <div className="absolute inset-x-6 top-6">
             <Empty title="No cells in this window">
-              {mode === "anomalies"
-                ? "No day in this range was flagged. Try “All cells”, or a period anchored to a documented event such as August 2025."
-                : "This window has no data. The Sentinel layers are also absent until the Earth Engine backfill runs."}
+              <p>
+                {mode === "anomalies"
+                  ? data.grain === "month"
+                    ? "No month in this range contains a flagged day. The window has been widened to whole months already, so try “All cells”, or a period anchored to a documented event such as August 2025."
+                    : "No day in this range was flagged. Try “All cells”, or a period anchored to a documented event such as August 2025."
+                  : "This window has no data. The Sentinel layers are also absent until the Earth Engine backfill runs."}
+              </p>
+              {data.coverage.from !== "" &&
+                (data.to < data.coverage.from || data.from > data.coverage.to) && (
+                  <p className="mt-2">
+                    The requested window ({data.from} → {data.to}) falls outside this layer's
+                    coverage, {data.coverage.from} → {data.coverage.to}
+                    {data.grain === "month"
+                      ? " — the SST mart is monthly and its backfill is still filling in earlier periods."
+                      : "."}
+                  </p>
+                )}
             </Empty>
           </div>
         )}
       </div>
 
-      <Legend breaks={data.breaks} domain={data.domain} layer={layer} />
-      <ActivityStrip activity={data.activity} breaks={data.breaks} />
+      <Legend breaks={data.breaks} domain={data.domain} layer={layer} grain={data.grain} />
+      <ActivityStrip activity={data.activity} breaks={data.breaks} grain={data.grain} />
     </div>
   );
 }
 
 /** The legend prints the real break values, so the colour scale is checkable rather than
- *  implied. It also states the cell resolution the colours are drawn on. */
-function Legend({ breaks, domain, layer }: { breaks: number[]; domain: { min: number; max: number }; layer: LayerKey }) {
+ *  implied. It also states the cell resolution the colours are drawn on, and — because it
+ *  changes what a value *means* — the grain the layer is stored at. */
+function Legend({
+  breaks,
+  domain,
+  layer,
+  grain,
+}: {
+  breaks: number[];
+  domain: { min: number; max: number };
+  layer: LayerKey;
+  grain: MapWindow["grain"];
+}) {
   const labels = [
     `< ${formatNumber(breaks[0])}`,
     `${formatNumber(breaks[0])}–${formatNumber(breaks[1])}`,
@@ -419,8 +457,10 @@ function Legend({ breaks, domain, layer }: { breaks: number[]; domain: { min: nu
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[var(--color-border)] px-4 py-2.5 text-xs">
       <span className="text-[var(--color-muted)]">
-        {layer === "fire" ? "Detections per cell" : "SST anomaly per cell"}
-        <span className="ml-1 text-[var(--color-subtle)]">(quantiles of what is shown)</span>
+        {layer === "fire" ? "Detections per cell" : "Monthly SST anomaly per cell"}
+        <span className="ml-1 text-[var(--color-subtle)]">
+          (quantiles of what is shown{grain === "month" ? " · monthly means" : ""})
+        </span>
       </span>
       <div className="flex items-center gap-2">
         <div className="flex overflow-hidden rounded border border-[var(--color-border)]">
@@ -443,30 +483,47 @@ function Legend({ breaks, domain, layer }: { breaks: number[]; domain: { min: nu
 }
 
 /**
- * Cells per day across the window.
+ * Cells per period across the window.
  *
  * This is what makes the events findable: on a map of a whole season the peak day is one
  * among many, and a reader has no way to know which day to look at. The strip shows where
  * the activity is, and the tallest bar is usually the event of interest.
+ *
+ * The label tracks the layer's grain: on the monthly SST layer each bar *is* a month, and
+ * calling that a day would be a small lie the reader has no way to catch.
  */
-function ActivityStrip({ activity, breaks }: { activity: MapWindow["activity"]; breaks: number[] }) {
+function ActivityStrip({
+  activity,
+  breaks,
+  grain,
+}: {
+  activity: MapWindow["activity"];
+  breaks: number[];
+  grain: MapWindow["grain"];
+}) {
   if (activity.length === 0) return null;
   const peakCells = Math.max(...activity.map((row) => row.cells));
   const busiest = activity.find((row) => row.cells === peakCells);
 
   if (activity.length < 2) return null;
 
+  const unit = grain === "month" ? "month" : "day";
+
   return (
     <div className="border-t border-[var(--color-border)] px-4 py-3">
       <div className="mb-1.5 flex items-baseline justify-between text-xs">
-        <span className="text-[var(--color-muted)]">Cells per day</span>
+        <span className="text-[var(--color-muted)]">Cells per {unit}</span>
         {busiest && (
           <span className="tabular-nums text-[var(--color-subtle)]">
             busiest {busiest.period_start}: {formatNumber(busiest.cells)} cells, peak {formatNumber(busiest.peak)}
           </span>
         )}
       </div>
-      <div className="flex h-12 items-end gap-px" role="img" aria-label={`Cells per day, busiest ${busiest?.period_start}`}>
+      <div
+        className="flex h-12 items-end gap-px"
+        role="img"
+        aria-label={`Cells per ${unit}, busiest ${busiest?.period_start}`}
+      >
         {activity.map((row) => {
           const height = Math.max(2, Math.round((row.cells / peakCells) * 100));
           return (

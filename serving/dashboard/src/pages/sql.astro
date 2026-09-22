@@ -41,11 +41,13 @@ export const prerender = false;
           UPDATE, DELETE, DROP, ALTER, CREATE, ATTACH, PRAGMA, and others outside SELECT/WITH).
         </p>
         <p>
-          <strong class="text-[var(--color-foreground)]">Not protected:</strong> the database
-          credential in use also has write scope, so a bug in the guard would have write
-          consequences. The banner above the editor reports the token's scope from its JWT. The
-          stronger control is issuing a read-only Turso token for this route and setting it here;
-          until then the guard is the only control.
+          <strong class="text-[var(--color-foreground)]">Not protected:</strong> the guard is
+          still the only thing standing between a query and the database. The dashboard prefers a
+          read-only credential (<code>TURSO_TOKEN_RO</code>), which makes a guard bug harmless —
+          but if that is not set, the connection falls back to the write-scoped token and a bug
+          would have write consequences. The banner above the editor reports the scope of
+          whichever token is actually in use, from its JWT, rather than implying a safety the
+          deployment may not have.
         </p>
       </CardContent>
     </Card>

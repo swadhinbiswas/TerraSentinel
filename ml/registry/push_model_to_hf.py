@@ -5,9 +5,11 @@ the address on the Hub and model cards and revisions are model-repo features —
 cannot live inside the lake repo, however convenient that would be.
 
 The card is generated from the bundle rather than written by hand, so it cannot drift
-from what was actually measured. That matters most for the uncomfortable finding: the
-evaluation shows this model reproduces the statistical rule exactly at the serving
-threshold, and the card says so.
+from what was actually measured. Every number in it — including the agreement with the
+statistical rule — comes from ``bundle.evaluation``, which training computes against
+``gold_fire_anomalies.is_anomaly`` (an independent reference), never against the
+model's own flags. When agreement is near-total the card says so as a measured
+limitation; when it is not, the card reports the real overlap.
 """
 
 from __future__ import annotations
@@ -24,6 +26,26 @@ from ops.redact import redact_text
 
 CARD_FILENAME = "README.md"
 
+#: How each known-event criterion reads on the card. A failed check appends the run's
+#: own verdict, so a miss is spelled out rather than rounded off.
+CRITERION_PHRASES: dict[str, str] = {
+    "flag": "caught by the serving threshold",
+    "rank": "caught by rank only, below the serving threshold",
+    "clean": "correctly not flagged (negative control)",
+    "missed": "missed",
+    "data-changed": "reported as a data change, not a model result",
+    "no-data": "no data for this window",
+}
+
+
+def _outcome_phrase(outcome: dict[str, Any]) -> str:
+    """One line's verdict, honest about failures."""
+    criterion = str(outcome.get("criterion") or "unknown")
+    phrase = CRITERION_PHRASES.get(criterion, criterion)
+    if outcome.get("passed"):
+        return phrase
+    return f"**FAILED** — {phrase}: {outcome.get('verdict')}"
+
 
 def render_model_card(bundle: ModelBundle) -> str:
     """Generate the model card from the bundle's own recorded measurements."""
@@ -36,15 +58,40 @@ def render_model_card(bundle: ModelBundle) -> str:
             return "n/a"
         return f"{value:.4f}" if isinstance(value, float) else str(value)
 
+    def number(name: str) -> float | None:
+        value = evaluation.get(name)
+        return float(value) if isinstance(value, (int, float)) else None
+
+    # What the comparison was against, stated outright: the reader has to know the
+    # reference is the gold mart's own flag and not the model's own output.
+    precision = number("precision_vs_reference")
+    jaccard = number("jaccard")
+    recall = number("reference_recall")
+    recall_text = f"{recall:.4f}" if recall is not None else "n/a"
+    reference_note = ""
+    if precision is not None and jaccard is not None:
+        selected_days = int(evaluation.get("model_selected", 0))
+        reference_days = int(evaluation.get("reference_flagged", 0))
+        overlap_days = int(evaluation.get("overlap", 0))
+        reference_note = (
+            "\n**Reference agreement.** The comparator is `gold_fire_anomalies.is_anomaly` "
+            "— the independent median/MAD rule (z ≥ 5) — not this model's own flags, so the "
+            f"numbers below can disagree and the model can be wrong. It flags {selected_days} "
+            f"days, the rule flags {reference_days}, they share {overlap_days}: precision "
+            f"{precision:.4f}, reference recall {recall_text}, Jaccard {jaccard:.4f}.\n"
+        )
+
     overlap_note = ""
-    if evaluation.get("precision_vs_reference") == 1.0:
+    if precision is not None and jaccard is not None and precision >= 0.99 and jaccard >= 0.99:
         overlap_days = int(evaluation.get("overlap", 0))
         selected_days = int(evaluation.get("model_selected", 0))
+        separation = metric("detection_count_ratio")
         overlap_note = (
             "\n**Measured limitation — read this before using the score.** At the serving "
-            "threshold the model's flagged slice is *identical* to the statistical median/MAD "
-            "rule in `gold_fire_anomalies` "
-            f"({overlap_days} of {selected_days} days, Jaccard 1.0). The highest days are ~20x "
+            "threshold the model's flagged slice is effectively *identical* to the statistical "
+            "median/MAD rule in `gold_fire_anomalies` "
+            f"({overlap_days} of {selected_days} days, Jaccard {jaccard:.4f}), measured against "
+            f"the rule's own flag rather than against the model. The highest days are ~{separation}x "
             "the rest, so they are trivially separable and every method finds the same ones. "
             "This model therefore adds **no information** over the rule on this dataset; it is "
             "a working baseline and a registry/scoring vehicle, not an improvement. Its value "
@@ -52,6 +99,47 @@ def render_model_card(bundle: ModelBundle) -> str:
             "flag rate — which needs the Sentinel deforestation series that is not yet "
             "backfilled.\n"
         )
+    # Prose between the evaluation table and the next heading, each block separated by a
+    # blank line so the Markdown renders whether or not a block is present.
+    notes = "".join(part for part in (reference_note, overlap_note) if part)
+    separable_bullet = (
+        "- **The top slice is trivially separable** (see the measured limitation above).\n"
+        if overlap_note
+        else ""
+    )
+
+    caught = int(evaluation.get("known_event_caught") or 0)
+    total = int(evaluation.get("known_event_total") or 0)
+    known_event_row = (
+        f"{metric('known_event_pass_rate')} ({caught}/{total} documented events)"
+        if total
+        else "n/a"
+    )
+
+    # The documented-events list is rendered from the run's own outcomes. A hardcoded
+    # list would claim "caught by flag" for an event the next training run missed.
+    outcomes = evaluation.get("known_events")
+    if isinstance(outcomes, list) and outcomes:
+        rank_only = sum(1 for outcome in outcomes if outcome.get("criterion") == "rank")
+        events_intro = (
+            "`ml/validation/known_events.py` holds real events with **measured** signatures. "
+            f"{rank_only} of {len(outcomes)} were caught only by rank (below the serving "
+            "threshold), which is reported rather than hidden:"
+            if rank_only
+            else f"`ml/validation/known_events.py` holds {len(outcomes)} checks against real "
+            "events with **measured** signatures. None relied on rank alone:"
+        )
+        event_lines = "\n".join(
+            f"- {outcome.get('region_id')} {outcome.get('window')}, peak "
+            f"**{int(outcome.get('max_detections') or 0):,}** — "
+            f"{_outcome_phrase(outcome)}"
+            for outcome in outcomes
+        )
+    else:
+        events_intro = (
+            "This bundle records no per-event outcomes, so nothing is claimed about them here."
+        )
+        event_lines = ""
 
     return f"""---
 license: apache-2.0
@@ -97,28 +185,21 @@ was measured:
 | Agreement with the median/MAD rule | {metric('precision_vs_reference')} |
 | Jaccard with the rule | {metric('jaccard')} |
 | Score mass in the top slice | {metric('score_mass_in_top_slice')} |
-| Known-event regression | {metric('known_event_pass_rate')} (6/6: four documented events caught, one negative control correctly unflagged, one caught by rank) |
-{overlap_note}
+| Known-event regression | {known_event_row} |
+{notes}
 ## Documented events used as a regression test
 
-`ml/validation/known_events.py` holds real events with **measured** signatures. Two were
-caught only by rank (below the serving threshold), which is reported rather than hidden:
+{events_intro}
 
-- Iberia 2025-08-15, peak **13,329** detections (caught by flag)
-- Greece 2025-08-12, peak **2,005** (caught by flag)
-- Iberia 2026-02-24..27, peak **1,184** — out-of-season winter fires (caught by rank)
-- Iberia 2026-07-03, peak **2,238** (caught by flag)
-- Greece 2024-09-30, peak **808** (caught by rank)
-- NEGATIVE CONTROL Iberia 2025-07-26, peak **172**, z=-0.5 — correctly *not* flagged
+{event_lines}
 
 ## Limitations
 
-- **Two regions and two years.** ~1,450 training rows. This is a baseline, not a
-  production dataset.
+- **{len(trained.get('regions') or [])} regions, {trained.get('first_day')} → {trained.get('last_day')}.**
+  {int(trained.get('rows') or 0):,} training rows. This is a baseline, not a production dataset.
 - **No labels.** Every number above is distributional or agreement-based. Nothing here
   is a precision or recall against truth.
-- **The top slice is trivially separable** (see the measured limitation above).
-- Instrument FRP is not comparable across sensors: MODIS mean FRP is ~100 MW where
+{separable_bullet}- Instrument FRP is not comparable across sensors: MODIS mean FRP is ~100 MW where
   VIIRS is ~15 MW for the same fires. The model consumes `frp_sum` and `frp_per_detection`
   pooled across instruments, so intensity features carry an instrument-mix confound.
 - The percentile score is relative to the *training* distribution. A genuinely new

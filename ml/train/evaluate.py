@@ -153,8 +153,11 @@ def evaluate(
             agreement_with_reference(model_scores, reference_flags, top_fraction=top_fraction)
         )
         report.notes.append(
-            "precision_vs_reference is agreement with the median/MAD z-score rule, which is a "
-            "weak comparator, not ground truth."
+            "precision_vs_reference is agreement with the median/MAD z-score rule "
+            "(gold_fire_anomalies.is_anomaly), which is a weak comparator, not ground truth. "
+            "The reference is the gold mart's own flag captured before training overwrote "
+            "is_anomaly with the model's — a model compared against itself would report a "
+            "constant 1.0."
         )
         precision = report.metrics.get("precision_vs_reference", 0.0)
         if precision >= 0.99:

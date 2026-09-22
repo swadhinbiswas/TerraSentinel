@@ -1,0 +1,74 @@
+# TerraSentinel — Databricks Asset Bundle root (deployed from the repo root).
+#
+# Hybrid v1 (ADR: databricks/README.md): GitHub Actions keeps owning the
+# free-tier bronze/Hugging Face/Cloudflare/Turso path. This bundle adds the
+# Databricks-native half beside it — a Workflows DAG that mirrors the same
+# cadences, a dbt target whose DuckDB file lives on a Unity Catalog Volume,
+# generated UC DDL/MERGE for the gold marts (databricks/sql/gold_ddl.sql),
+# and MLflow registry support.
+#
+#   validate:  databricks bundle validate -t dev
+#   deploy:    databricks bundle deploy  -t dev|prod
+#
+# Deploying never starts a second scheduler: `trigger_pause_status` below
+# pauses every schedule. See databricks/docs/GUIDELINE.md for the handover
+# procedure (pause the twin GitHub workflow in the same change you unpause
+# here).
+#
+# Requires Databricks CLI >= 0.295.0 (bundle.deployment.engine / direct
+# deployment engine).
+
+bundle:
+  name: terrasentinel
+  # Fail loudly on CLIs that would silently take the Terraform path.
+  engine: direct
+
+# Resource files are matched relative to this config file (repo root).
+include:
+  - databricks/resources/*.yml
+
+variables:
+  # Databricks Runtime for the job clusters. The repo targets Python 3.12;
+  # runtime 15.4 ships 3.11, which is exactly why tests/test_databricks.py
+  # parses the whole tree under the 3.11 grammar — bump spark_version once
+  # your account has a runtime with Python >= 3.12 and relax that test.
+  spark_version:
+    default: "15.4.x-scala2.12"
+  # Override per cloud: m5d.large (AWS), Standard_D4ds_v5 (Azure), ...
+  node_type_id:
+    default: "m5d.large"
+  # Hugging Face namespace owning the bronze lake and the model registry.
+  hf_namespace:
+    default: "swadhinbiswas"
+  # Unity Catalog destinations. Run databricks/sql/bootstrap.sql once per
+  # workspace (catalog + schema + volume, all IF NOT EXISTS); the gold tables
+  # come from the generated DDL (CREATE IF NOT EXISTS — idempotent).
+  uc_catalog:
+    default: "terrasentinel"
+  uc_schema:
+    default: "gold"
+  # Secret scope holding HF/FIRMS/GEE/Turso credentials; collectors read it
+  # through collectors.config.get_secret (env first, scope fallback).
+  secret_scope:
+    default: "terrasentinel"
+
+presets:
+  # Safety-first for the hybrid: deploying this bundle never unpauses a
+  # schedule. To hand a cadence to Databricks, set this to UNPAUSED and pause
+  # the twin GitHub workflow in the same change (docs/GUIDELINE.md §7).
+  trigger_pause_status: PAUSED
+  jobs_max_concurrent_runs: 1
+  tags:
+    project: terrasentinel
+    managed_by: databricks-bundle
+
+targets:
+  # Default. Development mode: dev_-prefixed resource names, schedules
+  # force-paused, bundle files under your own home folder.
+  dev:
+    mode: development
+    default: true
+  # Production. Deploy with a service principal and flip presets above there
+  # only when Databricks should own a cadence.
+  prod:
+    mode: production

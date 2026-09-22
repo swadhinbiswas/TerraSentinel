@@ -2,3 +2,4 @@ source_id,label,metric_types,anomaly_types,h3_resolution,cadence_cron,attributio
 firms,NASA FIRMS active fire detections,fire_radiative_power|brightness,fire,7,15 */6 * * *,Fire data: NASA FIRMS (MODIS and VIIRS active fire products).
 sentinel,Copernicus Sentinel-2 NDVI / Sentinel-1 SAR via Google Earth Engine,ndvi|sar_backscatter,deforestation|ice,7,30 3 * * *,"Imagery: Copernicus Sentinel-2 and Sentinel-1 (ESA), processed in Google Earth Engine."
 noaa_nsidc,NOAA OISST sea-surface temperature anomaly + NSIDC Sea Ice Index,sst_anomaly|sea_ice_extent|sea_ice_extent_climatology,fire|ice,5,45 4 * * 1,Ocean and ice data: NOAA OISST v2.1 and NSIDC Sea Ice Index (v4.0).
+entsoe,ENTSO-E day-ahead electricity price + actual load,day_ahead_price|actual_load,fire|deforestation|ice,7,35 7 * * *,"Energy market data: ENTSO-E Transparency Platform (day-ahead prices A44, actual total load A65)."

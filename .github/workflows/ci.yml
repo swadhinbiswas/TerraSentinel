@@ -30,10 +30,13 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "requirements/*.lock"
 
-      - name: Install (dev + transform + ml)
-        run: uv pip install --system -e ".[dev,transform,ml,ml-tracking]"
+      - name: Install (dev + transform + ml), pinned by requirements/ci.lock
+        # `--no-deps` everywhere: the lock is the complete, reviewed dependency
+        # set. Installing `-e .[extras]` would re-resolve at job time, so a fresh
+        # PyPI release could change what CI actually tests.
+        run: uv pip install --system --no-deps -r requirements/ci.lock -e .
 
       - name: Lint
         run: ruff check .
@@ -49,11 +52,15 @@ jobs:
 
       - name: Enumerate the synthetic lake
         # Same code path the production transform uses, so a regression in glob
-        # selection fails here rather than in the nightly job.
+        # selection fails here rather than in the nightly job. `--allow-missing`
+        # because the synthetic lake does not cover every registered source
+        # (entsoe has no staging model yet, so nothing reads its globs): a
+        # *staged* source with no files still fails the dbt build below, loudly.
         run: |
           python -m tools.bronze_manifest \
             --local-root data/bronze --root data/bronze \
-            --out transform/target/bronze_globs.json
+            --out transform/target/bronze_globs.json \
+            --allow-missing
           python -c "
           import json
           globs = json.load(open('transform/target/bronze_globs.json'))
@@ -66,6 +73,13 @@ jobs:
             --project-dir transform --profiles-dir transform \
             --vars "$(cat transform/target/dbt_vars.json)" \
             --no-partial-parse
+
+      - name: Unity Catalog DDL/MERGE must match GOLD_TABLES (generated)
+        # Same freshness gate as export_seeds: the committed
+        # databricks/sql/gold_ddl.sql must equal what this build regenerates,
+        # so editing a mart model without regenerating the SQL fails here —
+        # before the Databricks merge job could ever see a stale schema.
+        run: python -m tools.export_uc_ddl --check
 
       - name: Injected anomalies must be detected
         run: python -m tools.assert_anomalies_detected --duckdb-path transform/terrasentinel.duckdb
@@ -131,5 +145,5 @@ jobs:
         env:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: |
-          python -m pip install --quiet --disable-pip-version-check requests
+          python -m pip install --quiet --disable-pip-version-check requests==2.34.2
           python -m ops.notify --message "ci failed (${{ github.workflow }} on ${{ github.ref_name }})"

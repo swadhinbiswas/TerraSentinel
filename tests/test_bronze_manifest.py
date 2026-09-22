@@ -94,8 +94,10 @@ class TestManifestFromPaths:
             assert glob.count("**") == 1, glob
 
     def test_covers_every_configured_source_by_default(self) -> None:
+        from collectors.config import SOURCES
+
         manifest = manifest_from_paths([], ROOT)
-        assert set(manifest) == {"firms", "sentinel", "noaa_nsidc"}
+        assert set(manifest) == set(SOURCES)
 
 
 class TestMissingSources:

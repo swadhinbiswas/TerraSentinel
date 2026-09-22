@@ -29,6 +29,7 @@ from ops.resilience import SchemaValidationError
 
 __all__ = [
     "BRONZE_ENVELOPE",
+    "BRONZE_ENTSOE",
     "BRONZE_FIRMS",
     "BRONZE_NOAA_NSIDC",
     "BRONZE_SENTINEL",
@@ -55,6 +56,13 @@ METRIC_UNITS: dict[str, str] = {
     "sea_ice_extent": "10^6 km^2",
     "sea_ice_extent_climatology": "10^6 km^2",
     "sea_ice_area": "10^6 km^2",
+    # ENTSO-E labels the load quantity "MAW" (their megawatt code); verified live
+    # against Greece (4386 MAW = 4.4 GW), so the canonical unit is MW. Prices come
+    # as currency_Unit EUR + price_Measure_Unit MWH -> EUR/MWh. Bronze keeps each
+    # document's verbatim label; conversion to these canonical units belongs in
+    # staging, the one place that decides how a unit string maps to a number.
+    "day_ahead_price": "EUR/MWh",
+    "actual_load": "MW",
 }
 
 
@@ -199,6 +207,34 @@ BRONZE_NOAA_NSIDC = pa.DataFrameSchema(
     coerce=True,
 )
 
+#: ENTSO-E day-ahead prices (A44) and actual total load (A65): quarter-hourly
+#: bidding-zone aggregates, not point measurements. The coordinate is an
+#: attribution anchor (the region bbox centre) exactly like the hemispheric
+#: sea-ice rows above, which is why ``spatial_scope`` is explicit; ``zone_code``
+#: is what keeps two zones mapped to one region (ES and PT both -> iberia_fire)
+#: from ever being merged into a single series downstream.
+BRONZE_ENTSOE = pa.DataFrameSchema(
+    {
+        "timestamp": pa.Column(_UTC),
+        "latitude": pa.Column(float, checks=pa.Check.in_range(-90.0, 90.0), coerce=True),
+        "longitude": pa.Column(float, checks=pa.Check.in_range(-180.0, 180.0), coerce=True),
+        "metric_type": pa.Column(
+            str, checks=pa.Check.isin(["day_ahead_price", "actual_load"])
+        ),
+        "product": pa.Column(str, checks=pa.Check.str_length(min_value=3)),
+        "value": pa.Column(float, coerce=True),
+        # Verbatim from the document (MAW / MWH), nullable because a response may
+        # omit the unit element; enrich() falls back to METRIC_UNITS.
+        "unit": pa.Column(str, nullable=True),
+        # Required: a row without its bidding zone is unusable (see above).
+        "zone_code": pa.Column(str, checks=pa.Check.str_length(min_value=4)),
+        "spatial_scope": pa.Column(str, checks=pa.Check.isin(["bidding_zone"])),
+    },
+    name="bronze_entsoe",
+    coerce=True,
+)
+
+
 #: The unified silver contract consumed by dbt staging models.
 SILVER_OBSERVATIONS = pa.DataFrameSchema(
     {
@@ -206,7 +242,9 @@ SILVER_OBSERVATIONS = pa.DataFrameSchema(
         "metric_type": pa.Column(str, checks=pa.Check.isin(sorted(METRIC_UNITS))),
         "value": pa.Column(float, coerce=True),
         "unit": pa.Column(str, checks=pa.Check.isin(sorted(set(METRIC_UNITS.values())))),
-        "source_id": pa.Column(str, checks=pa.Check.isin(["firms", "sentinel", "noaa_nsidc"])),
+        "source_id": pa.Column(
+            str, checks=pa.Check.isin(["entsoe", "firms", "sentinel", "noaa_nsidc"])
+        ),
         "region_id": pa.Column(str),
         "h3_index": pa.Column(str, checks=pa.Check(_valid_h3, name="valid_h3_cell")),
         "latitude": pa.Column(float, checks=pa.Check.in_range(-90.0, 90.0), coerce=True),

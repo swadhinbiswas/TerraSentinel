@@ -19,7 +19,7 @@ Usage::
     python -m collectors.backfill_historical --start-date 2024-09-01 --dry-run
 
     # the real thing
-    python -m collectors.backfill_historical --sources firms,sentinel,noaa_nsidc
+    python -m collectors.backfill_historical --sources firms,sentinel,noaa_nsidc,entsoe
 """
 
 from __future__ import annotations
@@ -40,6 +40,12 @@ from collectors.base_collector import (
     select_regions,
 )
 from collectors.config import REGIONS, SOURCES, MissingCredential, preflight_sources
+from collectors.entsoe_collector import (
+    DOCUMENTS,
+    ZONE_BY_REGION,
+    EntsoeCollector,
+    iter_month_chunks,
+)
 from collectors.firms_collector import NRT_MAX_AGE_DAYS, SP_MIN_AGE_DAYS, FirmsCollector
 from collectors.noaa_nsidc_collector import NoaaNsidcCollector
 from collectors.sentinel_gee_collector import SentinelCollector
@@ -54,6 +60,7 @@ COLLECTOR_CLASSES: dict[str, type[BaseCollector]] = {
     "firms": FirmsCollector,
     "sentinel": SentinelCollector,
     "noaa_nsidc": NoaaNsidcCollector,
+    "entsoe": EntsoeCollector,
 }
 
 #: Default history depth. Two years covers a full seasonal cycle twice, which is
@@ -104,6 +111,18 @@ def estimate_requests(
             "windows": months,
             "region_count": len(regions),
             "estimated_requests": len(regions) * (1 + 4),  # 1 series call + ~4 grid chunks
+        }
+    if source_id == "entsoe":
+        # Calendar-month chunks x mapped zones x the two documents (A44, A65).
+        # Regions without a bidding zone contribute zero zones, so an unmapped
+        # selection is honestly estimated at zero requests.
+        chunks = len(list(iter_month_chunks(start, end)))
+        zones = sum(len(ZONE_BY_REGION.get(region.region_id, ())) for region in regions)
+        return {
+            "windows": chunks,
+            "zones": zones,
+            "region_count": len(regions),
+            "estimated_requests": chunks * zones * len(DOCUMENTS),
         }
     return {
         "windows": len(iter_date_windows(start, end, size_days=7)),

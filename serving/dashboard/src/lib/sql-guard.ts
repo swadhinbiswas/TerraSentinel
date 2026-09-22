@@ -1,10 +1,13 @@
 /**
  * Guard for the SQL console.
  *
- * The serving database is reached with a token that has **write** scope (the JWT's `a`
- * claim is `rw`), so an unguarded console is a way for anyone with the page to destroy
- * the gold tables. There is no per-query read-only token available here, so the guard
- * is the control. It is deliberately paranoid and refuses rather than sanitises:
+ * The strongest control is a read-only Turso token, and the dashboard now prefers one:
+ * `turso()` connects with `TURSO_TOKEN_RO` whenever it is configured, so a bug in this
+ * guard has no write consequences at all. Until that token is issued, the connection may
+ * still carry write scope (the JWT's `a` claim is `rw`), which makes an unguarded console
+ * a way for anyone with the page to destroy the gold tables — so the guard stays, as
+ * defence in depth rather than as the only line. It is deliberately paranoid and refuses
+ * rather than sanitises:
  *
  *   * one statement only — a trailing semicolon is allowed, anything after is not
  *   * must begin with SELECT or WITH
@@ -12,9 +15,8 @@
  *     named `created_at` does not trip it
  *   * a row cap appended when the query does not already limit itself
  *
- * The stronger control is a read-only Turso token for this route; `tokenScope()` reports
- * what the current token allows so the console can say so out loud instead of implying
- * a safety it does not have.
+ * `tokenScope()` reports what the token actually in use allows, so the console says so
+ * out loud instead of implying a safety it may not have.
  */
 
 const DENIED = [

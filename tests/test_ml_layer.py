@@ -162,12 +162,46 @@ class TestEvaluation:
     def test_agreement_detects_an_identical_model(self) -> None:
         # The measured case: a model that merely re-derives the reference rule. The
         # flags must use the same cutoff the function does, or the comparison is
-        # between two different rules.
+        # between two different rules. This exercises the *comparator* with identical
+        # inputs — it says nothing about what training passes in. The training path
+        # is pinned separately, against the gold mart's own flag, in
+        # tests/test_train_isolation_forest.py.
         scores = np.arange(100, dtype=float)
         flags = scores >= np.quantile(scores, 1.0 - 0.025)
         report = agreement_with_reference(scores, flags, top_fraction=0.025)
         assert report["precision_vs_reference"] == 1.0
         assert report["jaccard"] == 1.0
+
+    def test_agreement_is_below_one_when_the_model_disagrees(self) -> None:
+        # The regression this guards: passing the model's own flags as the reference
+        # made every agreement metric a constant 1.0, which is unfalsifiable by
+        # construction. A reference that flags the *quiet* end cannot coincide with
+        # the model's top slice, so both metrics must come out strictly below one.
+        scores = np.arange(100, dtype=float)
+        flags = np.zeros(100, dtype=bool)
+        flags[:10] = True  # the rule flags the ten lowest-scoring days
+        report = agreement_with_reference(scores, flags, top_fraction=0.05)
+
+        assert report["model_selected"] == 5.0
+        assert report["reference_flagged"] == 10.0
+        assert report["overlap"] == 0.0
+        assert report["precision_vs_reference"] < 1.0
+        assert report["jaccard"] < 1.0
+
+    def test_agreement_is_partial_when_the_disagreement_is_partial(self) -> None:
+        # Half of the model's flagged days are also flagged by the rule: precision
+        # must reflect exactly that, rather than collapsing to either 1.0 or 0.0.
+        scores = np.arange(100, dtype=float)
+        flags = np.zeros(100, dtype=bool)
+        flags[95:97] = True   # two of the model's top five
+        flags[0:3] = True     # three days the model will not select
+        report = agreement_with_reference(scores, flags, top_fraction=0.05)
+
+        assert report["model_selected"] == 5.0
+        assert report["reference_flagged"] == 5.0
+        assert report["overlap"] == 2.0
+        assert report["precision_vs_reference"] == 0.4
+        assert report["jaccard"] < 1.0
 
     def test_agreement_detects_a_disjoint_model(self) -> None:
         scores = np.arange(100, dtype=float)
@@ -215,6 +249,16 @@ class TestEvaluation:
         frame = pd.DataFrame({"detection_count": np.arange(10, dtype=float)})
         report = evaluate(frame, np.arange(10, dtype=float))
         assert any("never accuracy or F1" in note for note in report.notes)
+
+    def test_report_says_what_the_reference_actually_is(self) -> None:
+        # The metric is only interpretable if the reader knows the comparator is the
+        # gold mart's flag and not the model's own output.
+        frame = pd.DataFrame({"detection_count": np.arange(100, dtype=float)})
+        scores = np.arange(100, dtype=float)
+        flags = scores >= np.quantile(scores, 0.975)
+        report = evaluate(frame, scores, reference_flags=flags, top_fraction=0.025)
+        assert any("gold_fire_anomalies.is_anomaly" in note for note in report.notes)
+        assert any("constant 1.0" in note for note in report.notes)
 
 
 def scored_frame(**overrides) -> pd.DataFrame:

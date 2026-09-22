@@ -43,10 +43,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "requirements/*.lock"
 
       - name: Install
-        run: uv pip install --system -e ".[transform]"
+        run: uv pip install --system --no-deps -r requirements/transform.lock -e .
 
       - name: Seeds must match the Python region registry
         run: python -m tools.export_seeds --check
@@ -135,7 +135,7 @@ jobs:
         env:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: |
-          python -m pip install --quiet --disable-pip-version-check requests
+          python -m pip install --quiet --disable-pip-version-check requests==2.34.2
           python -m ops.notify \
             --message "transform failed (${{ github.event_name }})" \
             --context '{"dry_run":"${{ inputs.dry_run }}","skip_sync":"${{ inputs.skip_sync }}"}'

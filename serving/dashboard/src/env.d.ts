@@ -2,6 +2,8 @@
 
 type Env = {
   TURSO_DATABASE_URL?: string;
+  /** Read-only token: preferred, and what the dashboard connects with when set. */
+  TURSO_TOKEN_RO?: string;
   TURSO_AUTH_TOKEN?: string;
 };
 

@@ -10,8 +10,11 @@ The statistical score in the gold mart (``zscore``, ``baseline_*``) is deliberat
 **not** used as a feature. Two reasons: it is computed from the whole history
 including days after the one being scored, so it is hindsight rather than a causal
 signal; and if the model simply relearned it, comparing the two would be circular.
-It is instead used as the *reference baseline* during evaluation, which is where a
-weak, non-ground-truth comparator belongs.
+It is instead carried through as *reference metadata* (``zscore`` and the mart's own
+``is_anomaly`` flag) so evaluation can compare the model against it. That column is
+selected as a feature never: ``feature_matrix`` picks ``FIRE_FEATURE_COLUMNS``
+explicitly, and the reference is read after fitting, where it belongs — a weak,
+non-ground-truth comparator.
 
 Scope note: with two regions and two years this is ~1,460 rows. That is a baseline,
 not a production dataset. The value of the pipeline is that adding regions or years
@@ -109,7 +112,13 @@ base as (
         coalesce(frp_sum, 0) as frp_sum,
         coalesce(frp_max, 0) as frp_max,
         coalesce(frp_mean, 0) as frp_mean,
-        coalesce(confidence_pct_mean, 0) as confidence_pct_mean
+        coalesce(confidence_pct_mean, 0) as confidence_pct_mean,
+        -- Reference metadata, *not* features: the model must never see these, but
+        -- training needs them afterwards so evaluation can compare the model's flags
+        -- against the gold mart's own independent flag rather than against itself.
+        -- `feature_matrix` selects FIRE_FEATURE_COLUMNS only, so nothing here enters X.
+        zscore,
+        is_anomaly
     from gold.gold_fire_anomalies
     where zscore is not null          -- first year has no baseline to score against
 

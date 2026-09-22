@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -402,3 +403,47 @@ class TestDateSerialisation:
         rows = frame_to_rows(frame, ["d", "ts"], {"d": "DATE", "ts": "TIMESTAMP WITH TIME ZONE"})
         assert rows[0]["d"] == "2026-02-25"
         assert "T06:00" in rows[0]["ts"]
+
+
+class TestDbtKeyConsistency:
+    """`GOLD_TABLES` and dbt's uniqueness tests must describe the same row identity.
+
+    The sync upserts on `GOLD_TABLES`; dbt asserts uniqueness with
+    `unique_combination_of_columns`. Nothing else compares them, and neither side would
+    fail alone if they drifted: dbt only sees the mart, and the sync only sees its own
+    key. The required relationship is containment — the sync key may be a *superset* of
+    dbt's (gold_h3_fire adds a constant `metric_type`) but never a subset, because a
+    subset lets two distinct rows share an upsert key and silently overwrite each other.
+    """
+
+    MARTS = Path(__file__).resolve().parents[1] / "transform" / "models" / "marts" / "_marts.yml"
+
+    @staticmethod
+    def dbt_keys() -> dict[str, list[str]]:
+        """Map each mart to the columns its dbt uniqueness test asserts."""
+        yaml = pytest.importorskip("yaml")
+        document = yaml.safe_load(TestDbtKeyConsistency.MARTS.read_text(encoding="utf-8"))
+        keys: dict[str, list[str]] = {}
+        for model in document["models"]:
+            for test in model.get("tests") or []:
+                if isinstance(test, dict) and "unique_combination_of_columns" in test:
+                    spec = test["unique_combination_of_columns"]
+                    arguments = spec.get("arguments", spec) if isinstance(spec, dict) else spec
+                    keys[model["name"]] = list(arguments["combination_of_columns"])
+        return keys
+
+    def test_every_gold_table_is_covered_by_a_dbt_uniqueness_test(self) -> None:
+        dbt = self.dbt_keys()
+        assert set(dbt) == set(GOLD_TABLES), (
+            f"only in dbt: {sorted(set(dbt) - set(GOLD_TABLES))}; "
+            f"only in GOLD_TABLES: {sorted(set(GOLD_TABLES) - set(dbt))}"
+        )
+
+    def test_sync_keys_are_supersets_of_the_dbt_keys(self) -> None:
+        for table, sync_key in GOLD_TABLES.items():
+            dbt_key = self.dbt_keys()[table]
+            assert set(dbt_key) <= set(sync_key), (
+                f"{table}: sync keys {sync_key} do not cover dbt's {dbt_key} — "
+                "two rows dbt considers distinct could share an upsert key"
+            )
+            assert len(sync_key) == len(set(sync_key)), f"{table}: repeated key column in {sync_key}"
