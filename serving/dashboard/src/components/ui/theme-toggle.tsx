@@ -1,37 +1,19 @@
-import { useEffect, useState } from "react";
+import { useTheme } from "@/lib/theme";
 
 /**
  * Dark/light toggle.
  *
- * Applied by setting `data-theme` on `<html>` before paint (an inline script in the
- * layout), so a reload never flashes the wrong theme. The preference is the only thing
- * persisted, and it is a preference — not analytics.
+ * The theme is applied by setting `data-theme` on `<html>` (from an inline script in the
+ * layout, before first paint), so a reload never flashes the wrong theme. `useTheme` owns
+ * the storage key and the attribute, so this component is only the button.
  */
-const STORAGE_KEY = "terrasentinel-theme";
-
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-
-  useEffect(() => {
-    const current = document.documentElement.dataset.theme;
-    setTheme(current === "light" ? "light" : "dark");
-  }, []);
-
-  function toggle() {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // A blocked storage API must not break the toggle.
-    }
-  }
+  const [theme, setTheme] = useTheme();
 
   return (
     <button
       type="button"
-      onClick={toggle}
+      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
       title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
       className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"

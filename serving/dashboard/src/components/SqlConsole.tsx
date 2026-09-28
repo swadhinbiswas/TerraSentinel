@@ -34,7 +34,7 @@ const EXAMPLES: { label: string; sql: string }[] = [
   },
   {
     label: "Model vs rule",
-    sql: "select a.observation_date, a.detection_count, round(a.zscore,1) as rule_z,\n       round(p.anomaly_percentile,3) as model_pct, a.severity\nfrom gold_fire_anomalies a\njoin ml_predictions p\n  on p.region_id = a.region_id and p.observation_date = a.observation_date\nwhere a.is_anomaly = 1 order by model_pct limit 15",
+    sql: "select a.observation_date, a.detection_count, round(a.zscore,1) as rule_z,\n       round(p.anomaly_percentile,3) as model_pct, a.severity\nfrom gold_fire_anomalies a\njoin ml_predictions p\n  on p.region_id = a.region_id and p.observation_date = a.observation_date\n and p.model_version = (select model_version from ml_predictions\n                        group by model_version order by max(scored_at) desc limit 1)\nwhere a.is_anomaly = 1 order by model_pct limit 15",
   },
   {
     label: "Cell concentration",
@@ -42,7 +42,7 @@ const EXAMPLES: { label: string; sql: string }[] = [
   },
   {
     label: "Sea-ice departures",
-    sql: "select region_id, period_start, round(value,2) as extent, round(baseline_mean,2) as normal, round(zscore,2) as z\nfrom gold_ice_extent_trends order by zscore limit 12",
+    sql: "select region_id, period_start, round(value,2) as extent, round(baseline_mean,2) as normal, round(zscore,2) as z\nfrom gold_ice_extent_trends\nwhere baseline_mean is not null and value is not null\norder by zscore limit 12",
   },
   {
     label: "Pipeline history",
@@ -113,12 +113,12 @@ export default function SqlConsole() {
           </button>
           {info && (
             <span className="text-xs text-[var(--color-muted)]">
-              SELECT only · one statement · max {info.maxRows} rows
+              SELECT or WITH only · one statement · max {info.maxRows} rows
             </span>
           )}
           {result?.elapsedMs !== undefined && (
             <span className="ml-auto text-xs text-[var(--color-muted)]">
-              {result.rows?.length ?? 0} row(s) in {result.elapsedMs} ms
+              {result.rows?.length ?? 0} {result.rows?.length === 1 ? "row" : "rows"} in {result.elapsedMs} ms
               {result.truncated ? " · truncated at the row cap" : ""}
             </span>
           )}

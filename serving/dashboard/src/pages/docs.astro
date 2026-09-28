@@ -6,7 +6,7 @@ import Layout from "@/layouts/Layout.astro";
 export const prerender = false;
 
 const PIPELINE = [
-  { stage: "Collect", where: "GitHub Actions (cron)", what: "Python collectors pull FIRMS, Sentinel and NOAA/NSIDC. Exponential backoff, a per-source circuit breaker, Pandera validation at ingress and egress, H3 indexing, and partitioned writes are inherited from one base class." },
+  { stage: "Collect", where: "GitHub Actions (cron)", what: "Python collectors pull FIRMS, Sentinel and NOAA/NSIDC. Backoff, a per-source circuit breaker, Pandera checks at ingress and egress, H3 indexing and partitioned writes all come from one base class." },
   { stage: "Store", where: "Hugging Face Hub datasets", what: "Bronze parquet, git-backed, so every landing is versioned and attributable to a commit. Partitioned by source, region and period; the one-time historical pull lives under backfill/." },
   { stage: "Transform", where: "dbt + DuckDB", what: "staging → intermediate → gold. The lake is mirrored locally first, because DuckDB re-lists a remote repo tree on every query and that exhausts the Hub's API quota." },
   { stage: "Train", where: "GitHub Actions", what: "Isolation Forest on strictly causal features, tracked in MLflow with the exact dataset commit hash, published to a Hugging Face model repo with a generated model card." },
@@ -40,8 +40,8 @@ const LIMITATIONS = [
     <h2 class="text-xl font-semibold tracking-tight">How this works, and what it cannot tell you</h2>
     <p class="mt-2 text-sm text-[var(--color-muted)]">
       An unsupervised anomaly-detection pipeline over free satellite and sensor data, running
-      entirely on free tiers. GitHub Actions does the compute, Hugging Face Hub stores the lake and
-      the model registry, Turso serves the gold tables, Cloudflare Pages serves this dashboard.
+      entirely on free tiers. GitHub Actions does the compute, Hugging Face Hub holds the lake
+      and the model registry, Turso serves the gold tables, and Cloudflare Pages serves this page.
     </p>
   </section>
 
@@ -94,7 +94,7 @@ const LIMITATIONS = [
     <Card>
       <CardHeader>
         <CardTitle>Decisions worth explaining</CardTitle>
-        <CardDescription>The non-obvious choices, and the measurement that forced each.</CardDescription>
+        <CardDescription>The choices that needed arguing for, and what settled each one.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {DECISIONS.map((item) => (
@@ -111,7 +111,7 @@ const LIMITATIONS = [
     <Card>
       <CardHeader>
         <CardTitle>Limitations</CardTitle>
-        <CardDescription>Every one of these is measured, and several are recorded in the model card itself.</CardDescription>
+        <CardDescription>Each of these is measured. Several are recorded in the model card too.</CardDescription>
       </CardHeader>
       <CardContent>
         <ul class="space-y-2 text-sm text-[var(--color-muted)]">
@@ -139,7 +139,7 @@ const LIMITATIONS = [
           with measured signatures, including four that must be caught (the August 2025 Iberian
           megafire cluster, the Greek episode, the February 2026 winter anomaly, an early-July 2026
           surge) and a negative control that must stay unflagged. Two are caught by rank rather than
-          by the serving threshold, which is reported rather than hidden.
+          by the serving threshold, and the model card says which two.
         </p>
         <p>
           <strong class="text-[var(--color-foreground)]">Schema and freshness tests.</strong> Every

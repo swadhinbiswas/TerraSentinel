@@ -32,7 +32,7 @@ export const prerender = false;
     <Card>
       <CardHeader>
         <CardTitle>What the guard does and does not protect</CardTitle>
-        <CardDescription>Stated plainly, because a console that implies safety it lacks is worse than none.</CardDescription>
+        <CardDescription>Stated plainly, because a console that implies a safety it lacks is worse than none.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2 text-sm text-[var(--color-muted)]">
         <p>
@@ -42,12 +42,12 @@ export const prerender = false;
         </p>
         <p>
           <strong class="text-[var(--color-foreground)]">Not protected:</strong> the guard is
-          still the only thing standing between a query and the database. The dashboard prefers a
+          the only control between a query and the database. The dashboard prefers a
           read-only credential (<code>TURSO_TOKEN_RO</code>), which makes a guard bug harmless —
           but if that is not set, the connection falls back to the write-scoped token and a bug
           would have write consequences. The banner above the editor reports the scope of
-          whichever token is actually in use, from its JWT, rather than implying a safety the
-          deployment may not have.
+          whichever token is actually in use, read from its JWT, so you can see which one you
+          have.
         </p>
       </CardContent>
     </Card>

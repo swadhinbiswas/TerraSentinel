@@ -17,11 +17,11 @@ const stories = await loadStories(turso(env));
   <section class="mb-6 max-w-3xl">
     <h2 class="text-xl font-semibold tracking-tight">Four things worth looking at</h2>
     <p class="mt-2 text-sm text-[var(--color-muted)]">
-      Each write-up is generated from a live query, not from prose written once and left to rot.
-      The numbers are read from the serving database when the page renders; the SQL behind each
-      story is shown so you can check it yourself, or open it in the
+      Each write-up is generated from a live query, so the numbers are read from the serving
+      database when the page renders instead of being written once and going stale. The SQL
+      behind each story is shown so you can check it yourself, or open it in the
       <a href="/sql" class="text-[var(--color-accent)] underline decoration-dotted">SQL console</a>.
-      Where the two detectors disagree, that is reported rather than smoothed over.
+      Where the two detectors disagree, the write-up says so.
     </p>
   </section>
 
@@ -70,7 +70,7 @@ const stories = await loadStories(turso(env));
     <Card>
       <CardHeader>
         <CardTitle>Why there are no deforestation or glacier stories yet</CardTitle>
-        <CardDescription>The gap is a missing backfill, not a missing method.</CardDescription>
+        <CardDescription>The method exists; the backfill has not run.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2 text-sm text-[var(--color-muted)]">
         <p>
@@ -81,7 +81,7 @@ const stories = await loadStories(turso(env));
           configured.
         </p>
         <p>
-          Rather than hide this, the
+          The
           <a href="/catalog" class="text-[var(--color-accent)] underline decoration-dotted">catalog</a>
           marks each table as present or awaiting backfill, and
           <a href="/ops" class="text-[var(--color-accent)] underline decoration-dotted">ops</a>

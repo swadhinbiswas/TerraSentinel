@@ -64,7 +64,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
     title: "Sea-ice extent vs the 1981–2010 normal",
     domain: "cryosphere",
     description:
-      "Daily hemispheric sea-ice extent scored against the published NSIDC 1981–2010 per-day-of-year normal and its own standard deviation. The strongest baseline in the pipeline: 30 years, published, needing no estimation from our rows.",
+      "Daily hemispheric sea-ice extent scored against the published NSIDC 1981–2010 per-day-of-year normal and its own standard deviation. The strongest baseline in the pipeline: 30 years of published normals, so nothing has to be estimated from our own rows.",
     source: "NSIDC Sea Ice Index v4.0",
     dateColumn: "period_start",
     grain: "one row per hemisphere per day",
@@ -130,7 +130,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
     title: "Workflow run history",
     domain: "operations",
     description:
-      "One row per scheduled workflow execution: status, row counts, duration, and the GitHub run it came from. This is what the dashboard's freshness indicators read, so pipeline health is answered from data rather than from an uptime ping.",
+      "One row per scheduled workflow execution: status, row counts, duration, and the GitHub run it came from. The dashboard's freshness indicators read from this, so pipeline health is answered from the record rather than from an uptime ping.",
     source: "TerraSentinel workflows",
     dateColumn: "started_at",
     grain: "one row per workflow run",

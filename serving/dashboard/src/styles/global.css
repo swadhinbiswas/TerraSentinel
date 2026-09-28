@@ -106,17 +106,34 @@ table th {
   }
 }
 
-/* maplibre's controls are light by default; keep them legible in both themes. */
+/* MapLibre's controls ship light-on-white: the zoom glyphs and the popup's close button
+   are #333 fills, the scale bar is a white plate with a #333 border. Repainting the plate
+   to the surface token without touching the glyphs is what left the zoom buttons and the
+   popup × invisible on the dark theme, so the glyphs are inverted along with the rest. */
 .maplibregl-ctrl-group {
   background: var(--color-surface) !important;
   border: 1px solid var(--color-border) !important;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25) !important;
 }
 .maplibregl-ctrl-group button + button {
   border-top: 1px solid var(--color-border) !important;
 }
+.maplibregl-ctrl-group button:disabled {
+  opacity: 0.4;
+}
+:root:not([data-theme="light"]) .maplibregl-ctrl-icon,
+:root:not([data-theme="light"]) .maplibregl-ctrl-popup-close-button {
+  filter: invert(1);
+}
+.maplibregl-ctrl-scale {
+  background: color-mix(in oklab, var(--color-surface) 82%, transparent) !important;
+  border-color: var(--color-muted) !important;
+  color: var(--color-muted) !important;
+}
 .maplibregl-ctrl-attrib {
   background: color-mix(in oklab, var(--color-surface) 85%, transparent) !important;
   color: var(--color-muted) !important;
+  font-size: 10px !important;
 }
 .maplibregl-ctrl-attrib a {
   color: var(--color-muted) !important;
@@ -130,7 +147,19 @@ table th {
   font-size: 12px !important;
   box-shadow: 0 10px 30px rgb(0 0 0 / 0.35) !important;
 }
+.maplibregl-popup-close-button {
+  right: 2px !important;
+  top: 2px !important;
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 4px !important;
+}
+.maplibregl-popup-close-button:hover {
+  background: var(--color-surface-raised) !important;
+}
 .maplibregl-popup-tip {
   border-top-color: var(--color-surface) !important;
   border-bottom-color: var(--color-surface) !important;
+  border-left-color: var(--color-surface) !important;
+  border-right-color: var(--color-surface) !important;
 }

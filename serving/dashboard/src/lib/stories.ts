@@ -12,6 +12,7 @@
  * it is in `ml/validation/known_events.py`.
  */
 import type { Client } from "@libsql/client/web";
+import { CURRENT_MODEL } from "@/lib/queries";
 
 export interface StoryStat {
   label: string;
@@ -87,19 +88,19 @@ export const STORY_DEFINITIONS: StoryDefinition[] = [
     start: "2025-08-15",
     end: "2025-08-17",
     build: (f, t) => ({
-      title: "Three days that outran two years of history",
+      title: "Three days at the top of two years of record",
       standfirst: `A late-summer cluster put ${t.peak} fire detections into a single day — roughly ${Math.round(
         f.peak / (f.median || 1),
       )}× the seasonal median for that date.`,
       body: [
-        `The Iberian Peninsula burns every summer, and the seasonal baseline expects it. What stands out is not that August had fires but how far the top of the distribution reaches: the busiest day in this window carried ${t.peak} detections, against a seasonal median of ${t.median}.`,
-        `This is not a single spike. ${t.days} consecutive days sit in the window and ${t.flagged} of them cleared the anomaly threshold, which is what a sustained fire-weather episode looks like rather than a transient detection artefact.`,
-        `Large events spread out. Mean intensity reached ${fmt(f.frpPerDetection, 1)} MW per detection and the day's single densest hexagon held only a small share of the total — the signature of a landscape-scale event rather than one concentrated burn.`,
+        `The Iberian Peninsula burns every summer, and the seasonal baseline expects it. What is unusual is how far the top of the distribution reaches: the busiest day in this window carried ${t.peak} detections, against a seasonal median of ${t.median}.`,
+        `${t.days} consecutive days sit in the window and ${t.flagged} of them cleared the anomaly threshold. That is the shape of a sustained fire-weather episode; a single spike would look different.`,
+        `Large events spread out. Mean intensity reached ${fmt(f.frpPerDetection, 1)} MW per detection, and the day's densest hexagon held only a small share of the total. One concentrated burn would put most of the count in a single cell.`,
       ],
       stats: [
         { label: "Peak detections in a day", value: fmt(f.peak), hint: f.peakDate },
         { label: "Seasonal median", value: fmt(f.median), hint: "same day-of-year window" },
-        { label: "Departure", value: f.zAtPeak === null ? "—" : `z = ${f.zAtPeak.toFixed(1)}`, hint: "robust units (median/MAD)" },
+        { label: "Departure", value: f.zAtPeak === null ? "—" : `z = ${f.zAtPeak.toFixed(1)}`, hint: "median and scaled MAD" },
         { label: "Days flagged", value: `${f.flaggedDays} of ${f.spanDays}` },
         { label: "Mean intensity", value: f.frpPerDetection === null ? "—" : `${fmt(f.frpPerDetection, 1)} MW`, hint: "per detection" },
       ],
@@ -121,9 +122,9 @@ order by observation_date`,
       title: "A winter anomaly, and the strongest in the record",
       standfirst: `Winter fires are rare in Iberia: ${t.peak} detections against a seasonal median of ${t.median}.`,
       body: [
-        `This is the largest statistical departure in the whole two-year record — larger than the August megafire cluster — and it happened in winter. The late-February baseline expects almost nothing, so ${t.peak} detections against a median of ${t.median} produces a departure of z = ${t.z}.`,
-        `It outranks August precisely because the baseline is quiet. A big summer day is an amplification of the season; a big winter day is the season behaving incorrectly, and the robust baseline is what makes that difference measurable rather than a matter of opinion.`,
-        `Night share was ${t.night} on the peak day, below the regional average — daytime-driven burning rather than the overnight smouldering that dominates quiet periods.`,
+        `It is the largest statistical departure in the two-year record, ahead of the August megafire cluster, and it happened in winter. The late-February baseline expects almost nothing, so ${t.peak} detections against a median of ${t.median} gives a departure of z = ${t.z}.`,
+        `It outranks August because the baseline is quiet. A big summer day amplifies the season; a big winter day is the season misbehaving, and the robust baseline is what turns that into a number instead of an argument.`,
+        `Night share was ${t.night} on the peak day, below the regional average, so the burning was daylight-driven. Quiet periods here are mostly overnight smouldering.`,
       ],
       stats: [
         { label: "Peak detections", value: fmt(f.peak), hint: f.peakDate },
@@ -151,9 +152,9 @@ order by observation_date`,
       title: "A deficit that does not go away",
       standfirst: `${t.normal} × 10⁶ km² expected, ${t.extent} × 10⁶ km² observed — and it stays there.`,
       body: [
-        `Unlike a fire cluster, this is not an event. Antarctic sea-ice extent sat below the 1981–2010 normal for every day in the window, reaching a departure of z = ${t.z} on ${t.peakDate} and rarely recovering above z = −1.5.`,
-        `That shape changes how the data should be read. The boolean anomaly flag lights up on ${t.flagged} of ${t.days} days, which makes it nearly useless here — a threshold is the wrong instrument for a sustained shift. The z-score series is the honest representation, which is why the dashboard charts it rather than badging it.`,
-        `The baseline is the strongest in the pipeline: a published 30-year per-day-of-year normal with its own standard deviation, so this departure is measured against three decades rather than against our own short record.`,
+        `A fire cluster is an event. This is a level shift. Antarctic sea-ice extent sat below the 1981–2010 normal for every day in the window, reaching a departure of z = ${t.z} on ${t.peakDate} and rarely recovering above z = −1.5.`,
+        `That shape changes how the data should be read. The boolean anomaly flag lights up on ${t.flagged} of ${t.days} days, which makes it nearly useless here — a threshold is the wrong instrument for a sustained shift. Read the z-score series instead, which is why the dashboard charts it and leaves the flag off.`,
+        `The baseline here is the strongest in the pipeline: a published 30-year per-day-of-year normal with its own standard deviation, so this departure is measured against three decades rather than against our own short record.`,
       ],
       stats: [
         { label: "Most negative departure", value: f.zAtPeak === null ? "—" : `z = ${f.zAtPeak.toFixed(2)}`, hint: f.peakDate },
@@ -180,8 +181,8 @@ where region_id = 'antarctic' order by period_start desc limit 30`,
       standfirst: `The statistical baseline calls ${t.peakDate} extreme. The model ranks it at percentile ${t.percentile} — high, but below the serving threshold.`,
       body: [
         `This window is kept in the record specifically because the two detectors disagree. The median/MAD rule calls ${t.peakDate} extreme at z = ${t.z}; the Isolation Forest, which sees trailing windows rather than a seasonal baseline, ranks it at percentile ${t.percentile} and does not flag it.`,
-        `Neither is obviously wrong. A day can be far above its seasonal norm while still sitting inside a run of elevated days, and a model built on recent history will not find that unusual. That is a difference in what the two methods measure, not a bug.`,
-        `It is reported rather than resolved. A disagreement between a transparent rule and an opaque model is worth more to a reader than a tuned threshold that hides it.`,
+        `Neither is obviously wrong. A day can be far above its seasonal norm while still sitting inside a run of elevated days, and a model built on recent history will not find that unusual. The two methods measure different things, so the disagreement is expected rather than a bug.`,
+        `So it stays unresolved. A threshold tuned until the two agree would hide the more interesting fact.`,
       ],
       stats: [
         { label: "Peak detections", value: fmt(f.peak), hint: f.peakDate },
@@ -194,7 +195,9 @@ where region_id = 'antarctic' order by period_start desc limit 30`,
       query: `select a.observation_date, a.detection_count, round(a.zscore,1) as z,
        round(p.anomaly_percentile,3) as model_pct, a.severity
 from gold_fire_anomalies a
-left join ml_predictions p on p.region_id = a.region_id and p.observation_date = a.observation_date
+left join ml_predictions p
+  on p.region_id = a.region_id and p.observation_date = a.observation_date
+ and p.model_version = ${CURRENT_MODEL}
 where a.region_id = 'greece_fire' and a.observation_date between '2024-09-25' and '2024-10-05'
 order by a.observation_date`,
     }),
@@ -251,6 +254,7 @@ export async function loadStories(client: Client): Promise<StoryContext[]> {
                 from gold_fire_anomalies a
                 left join ml_predictions p
                   on p.region_id = a.region_id and p.observation_date = a.observation_date
+                 and p.model_version = ${CURRENT_MODEL}
                 where a.region_id = ? and a.observation_date between ? and ?
                 order by a.zscore desc nulls last`,
           args: [definition.regionId, definition.start, definition.end],

@@ -96,7 +96,7 @@ const domainCoverage = domains.map((domain) => {
         {problems.map((problem) => <li>{problem}</li>)}
       </ul>
       <p class="mt-1 text-xs text-[var(--color-muted)]">
-        The rest of the page is current; only the panels named above are missing.
+        Everything else on this page is current; only the panels named above are missing.
       </p>
     </section>
   )}
@@ -128,7 +128,7 @@ const domainCoverage = domains.map((domain) => {
     ))}
   </section>
 
-  <section class="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+  <section class="grid items-start gap-5 lg:grid-cols-[1.35fr_1fr]">
     <Card className="overflow-hidden">
       <CardHeader>
         <CardTitle>Anomaly map</CardTitle>
@@ -140,22 +140,59 @@ const domainCoverage = domains.map((domain) => {
       <AnomalyMap client:only="react" initial={fireWindow} />
     </Card>
 
-    <Card>
-      <CardHeader>
-        <CardTitle>Daily fire detections</CardTitle>
-        <CardDescription>Iberia and Greece. Log axis by default — counts span four orders of magnitude.</CardDescription>
-      </CardHeader>
-      <FireTrend rows={fireRows} log={Astro.url.searchParams.get("scale") !== "linear"} />
-    </Card>
+    {/* The map card is roughly twice the height of a single chart, so the right-hand column
+        carries two panels. One left a 500px void beside the map at a 1440p viewport. */}
+    <div class="space-y-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>Daily fire detections</CardTitle>
+          <CardDescription>Iberia and Greece. Log axis by default — counts span four orders of magnitude.</CardDescription>
+        </CardHeader>
+        <FireTrend rows={fireRows} log={Astro.url.searchParams.get("scale") !== "linear"} />
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Sea-ice extent</CardTitle>
+          <CardDescription>
+            Latest value against the published NSIDC 1981–2010 per-day normal. The departure is
+            sustained rather than episodic, so read the z-score rather than the flag.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {[["Arctic", arctic], ["Antarctic", antarctic]].map(([label, rows]) => {
+            const row = latest(rows as typeof iceRows);
+            if (!row) return <p class="text-sm text-[var(--color-muted)]">{label as string}: no data</p>;
+            return (
+              <div class="flex items-baseline justify-between gap-3">
+                <div>
+                  <p class="text-sm font-medium">{label as string}</p>
+                  <p class="text-xs text-[var(--color-muted)]">{String(row.period_start).slice(0, 10)}</p>
+                </div>
+                <div class="text-right">
+                  <p class="tabular-nums">{fmt(row.value, 2)} × 10⁶ km²</p>
+                  <p class="text-xs text-[var(--color-muted)]">normal {fmt(row.baseline_mean, 2)} · z {fmt(row.zscore, 2)}</p>
+                </div>
+                <Badge tone={row.severity as never}>{row.severity}</Badge>
+              </div>
+            );
+          })}
+          <a href="/analysis" class="block pt-1 text-xs text-[var(--color-accent)] underline decoration-dotted">
+            Full cryosphere analysis
+          </a>
+        </CardContent>
+      </Card>
+    </div>
   </section>
 
-  <section class="mt-5 grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+  <section class="mt-5">
     <Card>
       <CardHeader>
         <CardTitle>Strongest departures</CardTitle>
         <CardDescription>
           z is the departure from the region's own ±15-day seasonal baseline, in robust units
-          (median and scaled MAD). The model percentile is shown where batch scoring has run.
+          (median and scaled MAD). The model percentile comes from the version currently
+          being served, so a retrain does not leave two scores per day side by side.
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
@@ -181,38 +218,6 @@ const domainCoverage = domains.map((domain) => {
             ))}
           </tbody>
         </Table>
-      </CardContent>
-    </Card>
-
-    <Card>
-      <CardHeader>
-        <CardTitle>Sea-ice extent</CardTitle>
-        <CardDescription>
-          Latest value against the published NSIDC 1981–2010 per-day normal. The departure is
-          sustained rather than episodic, so read the z-score rather than the flag.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {[["Arctic", arctic], ["Antarctic", antarctic]].map(([label, rows]) => {
-          const row = latest(rows as typeof iceRows);
-          if (!row) return <p class="text-sm text-[var(--color-muted)]">{label as string}: no data</p>;
-          return (
-            <div class="flex items-baseline justify-between gap-3">
-              <div>
-                <p class="text-sm font-medium">{label as string}</p>
-                <p class="text-xs text-[var(--color-muted)]">{String(row.period_start).slice(0, 10)}</p>
-              </div>
-              <div class="text-right">
-                <p class="tabular-nums">{fmt(row.value, 2)} × 10⁶ km²</p>
-                <p class="text-xs text-[var(--color-muted)]">normal {fmt(row.baseline_mean, 2)} · z {fmt(row.zscore, 2)}</p>
-              </div>
-              <Badge tone={row.severity as never}>{row.severity}</Badge>
-            </div>
-          );
-        })}
-        <a href="/analysis" class="block pt-1 text-xs text-[var(--color-accent)] underline decoration-dotted">
-          Full cryosphere analysis →
-        </a>
       </CardContent>
     </Card>
   </section>

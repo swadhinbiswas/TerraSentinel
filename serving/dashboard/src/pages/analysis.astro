@@ -63,7 +63,7 @@ const featureRows = flagged && unflagged
         {problems.map((problem) => <li>{problem}</li>)}
       </ul>
       <p class="mt-1 text-xs text-[var(--color-muted)]">
-        The rest of the page is current; only the panels named above are missing.
+        Everything else on this page is current; only the panels named above are missing.
       </p>
     </section>
   )}
@@ -107,8 +107,8 @@ const featureRows = flagged && unflagged
         <CardHeader>
           <CardTitle>Seasonal profile — {region}</CardTitle>
           <CardDescription>
-            Mean detections per day by month. Orange bars are months that produced at least one
-            flagged day; the curve is what makes a winter anomaly legible.
+            Mean detections per day by month. Orange bars mark months that produced at least
+            one flagged day.
           </CardDescription>
         </CardHeader>
         <MonthBars
@@ -121,13 +121,13 @@ const featureRows = flagged && unflagged
     ))}
   </section>
 
-  <section class="mb-5 grid gap-5 lg:grid-cols-[1fr_1fr]">
+  <section class="mb-5 grid items-start gap-5 lg:grid-cols-[1fr_1fr]">
     <Card>
       <CardHeader>
         <CardTitle>Do the context features separate anything?</CardTitle>
         <CardDescription>
-          Flagged days versus the rest. A detector that only separates magnitude is not
-          separating anything interesting — these columns are the test.
+          Flagged days against the rest. Magnitude is the easy part; these columns show
+          whether anything else separates.
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
@@ -154,9 +154,9 @@ const featureRows = flagged && unflagged
         {flagged && unflagged && flagged.frp_per_detection && unflagged.frp_per_detection && (
           <p>
             Flagged days carry roughly {ratio(flagged.frp_per_detection, unflagged.frp_per_detection)?.toFixed(1)}×
-            the intensity per detection and concentrate less — large events spread across many
-            hexagons rather than one. FRP pools MODIS and VIIRS, whose scales differ ~6× for the
-            same fires, so intensity features carry an instrument-mix confound.
+            the intensity per detection, and their detections spread across many hexagons
+            instead of concentrating in one. FRP pools MODIS and VIIRS, whose scales differ ~6×
+            for the same fires, so intensity features carry an instrument-mix confound.
           </p>
         )}
       </CardContent>
@@ -166,8 +166,9 @@ const featureRows = flagged && unflagged
       <CardHeader>
         <CardTitle>Cryosphere — observed vs normal</CardTitle>
         <CardDescription>
-          The gap between the two series is the finding. Antarctic has run below the
-          1981–2010 normal for the entire window.
+          Solid: observed. Dashed: 1981–2010 normal. Antarctic has run below
+          that normal for the whole window, and the gap between the two lines shows it
+          better than a z-score column can.
         </CardDescription>
       </CardHeader>
       <IceLines rows={iceRows} region="antarctic" />
@@ -180,8 +181,8 @@ const featureRows = flagged && unflagged
       <CardHeader>
         <CardTitle>Strongest departures in the record</CardTitle>
         <CardDescription>
-          Ranked by robust z-score. The top row is a winter event, which is the point: with a
-          seasonal baseline, an out-of-season day can outrank a megafire.
+          Ranked by robust z-score. The top row is a winter event: with a seasonal
+          baseline, an out-of-season day can outrank a megafire.
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">

@@ -1,5 +1,5 @@
 ---
-import { categoryTicks, linePath, linearScale, type Point } from "@/lib/svg-chart";
+import { categoryTicks, linePath, linearScale } from "@/lib/svg-chart";
 import type { IceRow } from "@/lib/queries";
 
 /** Sea-ice extent against the published normal. The gap between the lines is the finding;
@@ -27,41 +27,99 @@ const LEFT = 40;
 const plotWidth = WIDTH - LEFT - 8;
 const plotHeight = HEIGHT - TOP - BOTTOM;
 
-const all = [...data.map((d) => d.extent), ...data.map((d) => d.normal ?? d.extent)];
-const lo = Math.min(...all);
-const hi = Math.max(...all);
+// The y domain has to be finite before anything is scaled by it. A row with a null
+// extent or a null normal spreads `Math.min(...values)` to Infinity, every projected y
+// becomes NaN, and the whole chart renders as nothing. The usual `value ?? fallback`
+// trick does not help, because the fallback is the other null. So the series are paired
+// off explicitly and a point survives only when both numbers are present, with the
+// observed line broken at any day the normal is missing.
+const pairs = data.map((d, i) => ({ d, i, extent: d.extent, normal: d.normal }));
+const complete = pairs.filter((p) => Number.isFinite(p.extent) && p.normal !== null && Number.isFinite(p.normal));
+const observedOnly = pairs.filter((p) => Number.isFinite(p.extent));
+
+const empty = observedOnly.length === 0;
+
+const values = [
+  ...(empty ? [] : complete.flatMap((p) => [p.extent, p.normal as number])),
+  ...(complete.length === 0 ? observedOnly.map((p) => p.extent) : []),
+];
+const lo = values.length > 0 ? Math.min(...values) : 0;
+const hi = values.length > 0 ? Math.max(...values) : 1;
 const pad = Math.max((hi - lo) * 0.1, 0.2);
 const y = linearScale([lo - pad, hi + pad], [TOP + plotHeight, TOP]);
 const x = linearScale([0, Math.max(data.length - 1, 1)], [LEFT, LEFT + plotWidth]);
 
-const observed: Point[] = data.map((d, i) => ({ x: x(i), y: y(d.extent) }));
-const normal: Point[] = data.filter((d) => d.normal !== null).map((d) => ({ x: x(data.indexOf(d)), y: y(d.normal as number) }));
-const ticks = [lo, (lo + hi) / 2, hi];
-const xTicks = categoryTicks(data.length, plotWidth, 4);
+/** One contiguous run of indices, so a gap in the data breaks the line instead of
+ *  joining the two sides of it with a straight segment that never happened. */
+function runs<T>(items: T[], contiguous: (item: T, index: number) => boolean): T[][] {
+  const out: T[][] = [];
+  let current: T[] = [];
+  items.forEach((item, index) => {
+    if (contiguous(item, index)) {
+      current.push(item);
+      return;
+    }
+    if (current.length > 0) out.push(current);
+    current = [];
+  });
+  if (current.length > 0) out.push(current);
+  return out;
+}
+
+const normalRuns = runs(complete, (_, index) => index === 0 || complete[index - 1].i === complete[index].i - 1);
+const observedRuns = runs(observedOnly, (_, index) => index === 0 || observedOnly[index - 1].i === observedOnly[index].i - 1);
+
+const normalPaths = normalRuns
+  .filter((run) => run.length > 1)
+  .map((run) => linePath(run.map((p) => ({ x: x(p.i), y: y(p.normal as number) }))));
+const observedPaths = observedRuns.map((run) =>
+  linePath(run.map((p) => ({ x: x(p.i), y: y(p.extent) }))),
+);
+const singleObserved = observedRuns.filter((run) => run.length === 1);
+
+const ticks = values.length > 0 ? [lo, (lo + hi) / 2, hi] : [];
+const xTicks = data.length > 0 ? categoryTicks(data.length, plotWidth, 4) : [];
 ---
 
-<div class="px-2 pt-2">
-  <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label={`Sea-ice extent versus the 1981-2010 normal for ${region}`}>
-    {ticks.map((tick) => (
-      <g>
-        <line x1={LEFT} x2={LEFT + plotWidth} y1={y(tick)} y2={y(tick)} stroke="var(--color-border)" stroke-dasharray="3 3"></line>
-        <text x={LEFT - 5} y={y(tick) + 3.5} text-anchor="end" font-size="9" fill="var(--color-subtle)">{tick.toFixed(1)}</text>
-      </g>
-    ))}
-    <path d={linePath(normal)} fill="none" stroke="var(--color-subtle)" stroke-width="1.2" stroke-dasharray="4 3"></path>
-    <path d={linePath(observed)} fill="none" stroke="var(--color-accent)" stroke-width="1.8"></path>
-    {data.map((d, i) => (
-      <circle cx={x(i)} cy={y(d.extent)} r="6" fill="transparent">
-        <title>{`${d.date}: ${d.extent.toFixed(2)} × 10⁶ km²${d.normal === null ? "" : ` (normal ${d.normal.toFixed(2)}, z=${d.z === null ? "—" : Number(d.z).toFixed(2)})`}`}</title>
-      </circle>
-    ))}
-    {xTicks.map((tick) => (
-      <text x={LEFT + tick.x} y={HEIGHT - 6} text-anchor="middle" font-size="9" fill="var(--color-subtle)">
-        {data[tick.label]?.date.slice(5)}
-      </text>
-    ))}
-  </svg>
+<div class="px-4 pt-3">
+  <p class="text-xs font-medium text-[var(--color-muted)]">
+    {region === "antarctic" ? "Antarctic" : "Arctic"}
+  </p>
 </div>
-<p class="px-4 pb-3 text-xs text-[var(--color-muted)]">
-  Solid: observed. Dashed: 1981–2010 normal. The vertical gap is the deficit.
-</p>
+<div class="px-2">
+  {empty ? (
+    <p class="py-8 text-center text-xs text-[var(--color-muted)]">
+      No {region === "antarctic" ? "Antarctic" : "Arctic"} extent rows in this window.
+    </p>
+  ) : (
+    <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label={`Sea-ice extent versus the 1981-2010 normal for ${region}`}>
+      {ticks.map((tick) => (
+        <g>
+          <line x1={LEFT} x2={LEFT + plotWidth} y1={y(tick)} y2={y(tick)} stroke="var(--color-border)" stroke-dasharray="3 3"></line>
+          <text x={LEFT - 5} y={y(tick) + 3.5} text-anchor="end" font-size="9" fill="var(--color-subtle)">{tick.toFixed(1)}</text>
+        </g>
+      ))}
+      {normalPaths.map((d) => (
+        <path d={d} fill="none" stroke="var(--color-subtle)" stroke-width="1.2" stroke-dasharray="4 3"></path>
+      ))}
+      {observedPaths.map((d) => (
+        <path d={d} fill="none" stroke="var(--color-accent)" stroke-width="1.8"></path>
+      ))}
+      {singleObserved.map((run) => (
+        <circle cx={x(run[0].i)} cy={y(run[0].extent)} r="1.8" fill="var(--color-accent)"></circle>
+      ))}
+      {data.map((d, i) => (
+        Number.isFinite(d.extent) && (
+          <circle cx={x(i)} cy={y(d.extent)} r="6" fill="transparent">
+            <title>{`${d.date}: ${d.extent.toFixed(2)} × 10⁶ km²${d.normal === null || !Number.isFinite(d.normal) ? "" : ` (normal ${d.normal.toFixed(2)}, z=${d.z === null || !Number.isFinite(Number(d.z)) ? "—" : Number(d.z).toFixed(2)})`}`}</title>
+          </circle>
+        )
+      ))}
+      {xTicks.map((tick) => (
+        <text x={LEFT + tick.x} y={HEIGHT - 6} text-anchor="middle" font-size="9" fill="var(--color-subtle)">
+          {data[tick.label]?.date.slice(5)}
+        </text>
+      ))}
+    </svg>
+  )}
+</div>

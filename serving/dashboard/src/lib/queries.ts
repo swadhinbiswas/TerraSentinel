@@ -126,6 +126,45 @@ export async function tableExists(client: Client, table: string): Promise<boolea
   return result.rows.length > 0;
 }
 
+/**
+ * A predicate that pins `ml_predictions` to the model version currently being served.
+ *
+ * `ml_predictions` is keyed by (region, day, model version), and a retrain leaves the
+ * previous version's rows in place beside the new ones. A join that ignores the version
+ * multiplies every day by the number of models ever scored: the overview's strongest
+ * departures table was listing the same day twice with two different percentiles, and
+ * nothing on the page said which model produced which. The current version is the one with
+ * the most recent `scored_at`.
+ *
+ * A scalar subquery rather than a bound parameter, because it binds to nothing and so
+ * cannot reorder the positional `?` arguments, and because it degrades to no match when
+ * the table is empty instead of failing the query.
+ */
+export const CURRENT_MODEL = `(select model_version from ml_predictions
+                              group by model_version
+                              order by max(scored_at) desc limit 1)`;
+
+/** The model the dashboard reports on, or null when nothing is scored yet. */
+export async function currentModel(
+  client: Client,
+): Promise<{ version: string; scored_at: string; predictions: number } | null> {
+  try {
+    const result = await client.execute(
+      `select model_version, max(scored_at) as scored_at, count(*) as n
+       from ml_predictions group by model_version order by max(scored_at) desc limit 1`,
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      version: String(row.model_version),
+      scored_at: String(row.scored_at),
+      predictions: Number(row.n ?? 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function anomalies(
   client: Client,
   options: { sinceDays?: number; region?: string; onlyAnomalies?: boolean } = {},
@@ -152,6 +191,7 @@ export async function anomalies(
           left join ml_predictions p
             on p.region_id = a.region_id
            and p.observation_date = a.observation_date
+           and p.model_version = ${CURRENT_MODEL}
           where ${clauses.join(" and ")}
           order by a.observation_date`,
     args,
@@ -420,21 +460,8 @@ export async function health(client: Client): Promise<HealthReport> {
     /* pipeline_runs is written by the workflows; absence is reported as empty */
   }
 
-  try {
-    const model = await client.execute(
-      `select model_version, max(scored_at) as scored_at, count(*) as n
-       from ml_predictions group by model_version order by scored_at desc limit 1`,
-    );
-    if (model.rows.length > 0) {
-      report.model = {
-        version: model.rows[0].model_version as string,
-        scored_at: model.rows[0].scored_at as string,
-        predictions: Number(model.rows[0].n ?? 0),
-      };
-    }
-  } catch {
-    /* no model scores yet */
-  }
+  const model = await currentModel(client);
+  if (model) report.model = model;
 
   report.ok =
     report.database.reachable &&
@@ -566,21 +593,8 @@ export async function opsReport(client: Client): Promise<OpsReport> {
     rows: statuses.reduce((sum, status) => sum + (status.rows ?? 0), 0),
   };
 
-  try {
-    const model = await client.execute(
-      `select model_version, max(scored_at) as scored_at, count(*) as n
-       from ml_predictions group by model_version order by scored_at desc limit 1`,
-    );
-    if (model.rows.length > 0) {
-      report.model = {
-        version: model.rows[0].model_version as string,
-        scored_at: model.rows[0].scored_at as string,
-        predictions: Number(model.rows[0].n ?? 0),
-      };
-    }
-  } catch {
-    /* no scores yet */
-  }
+  const model = await currentModel(client);
+  if (model) report.model = model;
 
   return report;
 }

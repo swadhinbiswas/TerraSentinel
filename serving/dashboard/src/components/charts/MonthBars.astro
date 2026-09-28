@@ -55,7 +55,7 @@ const max = Math.max(...data.map((d) => d.mean), 1);
           rx="2"
           fill={highlighted ? "var(--color-i4)" : "var(--color-i1)"}
         >
-          <title>{`${MONTHS[row.month - 1]}: ${row.mean.toFixed(1)} mean detections/day${row.flagged ? `, ${row.flagged} flagged day(s)` : ""}`}</title>
+          <title>{`${MONTHS[row.month - 1]}: ${row.mean.toFixed(1)} mean detections/day${row.flagged ? `, ${row.flagged} flagged ${row.flagged === 1 ? "day" : "days"}` : ""}`}</title>
         </rect>
       );
     })}
