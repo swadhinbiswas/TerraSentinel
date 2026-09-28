@@ -116,13 +116,24 @@ jobs:
           cache: npm
           cache-dependency-path: serving/dashboard/package-lock.json
 
-      - name: Dashboard build (type-checked, no credentials needed)
-        # `astro check` is the gate that matters here: it caught a `class` vs
-        # `className` mistake on React islands (silently dropping every style) and a
-        # call site left on an old function signature.
+      - name: Dashboard tests
+        # The dashboard's own suite: the SQL deny-list, the oklch→hex ramp conversion, the
+        # pipeline stage-state rules, the WebGL probe, the map projection and the chart
+        # arithmetic. No credentials needed — the Turso client is never constructed, so a
+        # fork can run it.
         working-directory: serving/dashboard
         run: |
           npm ci --no-audit --no-fund
+          npm test
+
+      - name: Dashboard build (type-checked, no credentials needed)
+        # `astro check` is the gate that matters here: it caught a `class` vs
+        # `className` mistake on React islands (silently dropping every style) and a
+        # call site left on an old function signature. `astro build` follows because
+        # `check` passes builds that then fail — a page importing a component that only
+        # exists in a registry it has not fetched will type-check and still not render.
+        working-directory: serving/dashboard
+        run: |
           npx astro check
           npx astro build
 

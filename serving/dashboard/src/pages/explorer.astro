@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { catalog } from "@/lib/queries";
 import { turso } from "@/lib/turso";
 import Layout from "@/layouts/Layout.astro";
+import PageHeader from "@/components/ui/page-header.astro";
 
 export const prerender = false;
 
@@ -18,15 +19,17 @@ const tables = (await catalog(turso(env))).map((table) => ({
 ---
 
 <Layout title="TerraSentinel — data explorer" description="Browse the serving tables with filters.">
-  <section class="mb-4 max-w-3xl">
-    <h2 class="text-xl font-semibold tracking-tight">Explorer</h2>
-    <p class="mt-2 text-sm text-[var(--color-muted)]">
-      Page through any table in the serving database. The table list comes from the catalog, and
-      the row query is built server-side against that allowlist — a name outside it is refused.
-      Absent tables (the Sentinel-dependent ones) are not selectable, because browsing a table
-      that does not exist is not a useful error to show you.
+  <PageHeader
+    eyebrow="Browse rows"
+    title="Explorer"
+  >
+    <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+      Page through any table in the serving database. The table list comes from the catalog,
+      and the row query is built server-side against that allowlist, so a name outside it is
+      refused. Absent tables are not selectable, because browsing a table that does not exist
+      is not a useful error to show you.
     </p>
-  </section>
+  </PageHeader>
 
   <Card>
     <CardHeader>

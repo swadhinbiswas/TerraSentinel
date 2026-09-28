@@ -26,7 +26,8 @@ fire detections chart, and KPI cards reporting 268,543 detections and 32 flagged
 | 9 | ENTSO-E day-ahead price + actual load (4th source) | collector **done**; bronze only, no dbt staging model |
 | 10 | Databricks hybrid path (Asset Bundle, Unity Catalog, Workflows, MLflow) | scaffolded + tested; free-tier path stays primary |
 
-`592` unit tests, a full dbt build, and a type-checked dashboard build, all offline. The
+`592` Python unit tests, `145` dashboard tests, a full dbt build, and a type-checked
+dashboard build, all offline. The
 transform layer runs against a synthetic lake with deliberately injected anomalies, and CI
 asserts the gold marts actually flag them; see "Proving it works" below.
 
@@ -36,7 +37,7 @@ Turso. `collect sentinel` skips with a notice until the `GEE_SERVICE_ACCOUNT_JSO
 secret is provisioned, so a red run always means a real breakage.
 
 **Live:** [terrasentinel-dashboard.pages.dev](https://terrasentinel-dashboard.pages.dev).
-8 pages on Cloudflare's edge that read Turso directly from workerd, with no backend service
+9 pages on Cloudflare's edge that read Turso directly from workerd, with no backend service
 in between.
 
 **Serving database live:** 76,607 rows synced into Turso
@@ -191,18 +192,108 @@ Three properties are load-bearing:
 ## The dashboard
 
 ```
-serving/dashboard/   Astro + React islands + Tailwind, deployed to Cloudflare Pages
-  src/lib/turso.ts       libSQL client — server-side ONLY, never imported by an island
-  src/lib/queries.ts     every read the dashboard performs, one place
-  src/lib/registry.ts    the data catalog, and the explorer's table allowlist
-  src/lib/sql-guard.ts   SELECT-only guard for the console
-  src/lib/stories.ts     investigations that query the mart at render time
-  src/pages/api/         health · anomalies · ice · map · query · explorer · ops
-  src/components/        AnomalyMap, TrendChart, IceChart, SeasonalProfile,
-                         ExplorerTable, SqlConsole
+serving/dashboard/   Astro + React islands + Tailwind v4 + shadcn/ui, on Cloudflare Pages
+  src/lib/turso.ts        libSQL client — server-side ONLY, never imported by an island
+  src/lib/queries.ts      every read the dashboard performs, in one place
+  src/lib/registry.ts     the data catalog, the explorer's table allowlist, source→mart map
+  src/lib/sql-guard.ts    SELECT-only guard for the console
+  src/lib/flow.ts         stage specs and the state rules behind the pipeline view
+  src/lib/periods.ts      the map's window presets, and which layers each suits
+  src/lib/utils.ts        the oklch→hex conversion both canvas renderers need
+  src/lib/svg-chart.ts    the scale and path arithmetic the charts are built from
+  src/lib/theme.ts        useTheme, with no mount-time setState
+  src/components/map/     webgl probe · shared geometry · Canvas 2D fallback renderer
+  src/components/flow/    the live pipeline rail
+  src/pages/api/          health · anomalies · ice · map · flow · query · explorer · ops
 ```
 
-Eight pages: Overview · Analysis · Stories · Catalog · Explorer · SQL · Ops · Docs.
+Nine pages: Overview · Pipeline · Analysis · Stories · Catalog · Explorer · SQL · Ops · Docs.
+
+### The pipeline view
+
+`/pipeline` is the page that answers "is this still working". Six stages — collect, store,
+transform, train, score, serve — each with a state derived from `pipeline_runs`:
+
+| State | Means |
+|---|---|
+| `live` | last run succeeded and is inside the stage's freshness budget |
+| `overdue` | last run succeeded but is past the budget for that stage's cadence |
+| `failed` | the most recent run did not succeed, whatever its age |
+| `unrecorded` | the workflow writes a run row on every execution, and there are none |
+| `external` | the stage has no run of its own (serving: the dashboard answering is the evidence) |
+
+The distinction that matters is `unrecorded`. A stage that has never run and a stage whose
+run history is missing look identical in the database, and the default rendering — green —
+reads as healthy in both cases. `unrecorded` renders as a gap and names the reason instead.
+The same rule governs everything else on the site: a mart that is absent is reported as
+absent, a source without credentials is reported as blocked, and a stage that is late says
+how late. Nothing is inferred from a neighbouring stage's health.
+
+Each source carries two independent badges, because collecting and serving are different
+stages and only one of them is a promise to a reader: whether its credentials are present,
+and whether any mart is built from it. **ENTSO-E is the second badge that says "not on a
+page".** It is collected daily with a valid key and there is no gold mart from it, so
+nothing can show it — previously the page said nothing either way, which is how a
+collected-but-unserved source reads as a served one. The `sourceIds` field on the registry
+is the single declaration behind that, inverted into `servedBy`; the mart itself is a dbt
+change and is listed as phase 9 in the status table above.
+
+### The map
+
+Two renderers, chosen by a probe rather than by assumption.
+
+**MapLibre** when the browser can actually give it a WebGL context. **A Canvas 2D renderer**
+when it cannot, drawing the same H3 boundaries computed in the browser by h3-js.
+
+This exists because `maplibre-gl` calls `canvas.getContext("webgl2")` in its `Map`
+constructor and throws when it returns null, unguarded and with no error boundary — so a
+browser with WebGL disabled or blocklisted took the whole page's map panel down. The obvious
+fix, testing `"WebGL2RenderingContext" in window`, does not work: that is still `true` in
+exactly the browsers that fail. The probe has to ask for a context and make it answer a
+call, because a blocklisted driver can hand out a context whose every method throws.
+
+The probe is eight cases in `webgl.test.ts` and they are worth reading, because the
+interesting one is the fifth: creating a context is not evidence that it works.
+
+**The map's data is fetched, not embedded.** The overview was 1.75 MB, of which 1,607,256
+bytes were a single island props blob: 4,392 cells, devalue-encoded into the markup. The
+island re-fetched on mount anyway, and `client:only` renders an empty div either way, so
+the seed was covering a gap of a few hundred milliseconds at the cost of a megabyte. The
+page now passes only the window's summary and the island shows a skeleton until its own
+response lands. That is the one regression, and it is deliberate: a loading state that
+says "loading" is worth more than a first paint that arrives a round trip earlier.
+
+**MapLibre is not in the island bundle.** It is loaded with a dynamic `import()` *after*
+the probe passes. Before, the island was 1,292 kB / 358 kB gzipped and roughly two thirds of
+that was a renderer that the browsers reaching the fallback branch can never construct. It
+is now 231 kB / 72 kB gzipped, with MapLibre in a separate 1,053 kB / 285 kB chunk that
+only a machine which can run it ever fetches — an 80% cut for exactly the population that
+was crashing. `Popup` is passed into the one module-scope function that needs it, because
+a function outside the component cannot close over a module that is not there yet.
+
+`/api/map` is the heaviest response the site serves, so it carries a strong ETag. A full
+season of daily cells is ~1.2 MB of JSON, and the underlying data changes a few times a
+day, so without a validator every revalidation after the 300s window re-downloads all of
+it. With one, the second visit onward gets a 304 and 0 bytes. The browser revalidates
+transparently; there is no client-side code involved.
+
+**The window list is layer-aware.** The presets are anchored to measured fire events, and
+they were offered against the SST layer too — which starts in June 2026 and has no rows
+before then. The result was an empty map, and an empty state that explained the gap by
+naming the Earth Engine backfill, which has nothing to do with sea-surface temperature. A
+table of which layers each window suits (`PERIOD_LAYERS`) fixes the dropdown, the hints are
+resolved per layer so a shared window cannot describe the other layer's data, and the empty
+state now states one cause it can prove from the response rather than two that disagree.
+
+**The map's state is addressable.** Layer, window, region and mode live in the query
+string, validated against the option lists on read (the query string is user-editable, and
+a bad `layer=foo` would otherwise reach the API). A finding can be linked to, and the back
+button leaves the page rather than walking through every change made to it.
+
+**The densest cells are reachable from the keyboard.** The map is a canvas in both
+renderers, so nothing drawn in it is focusable. The eight densest cells are also exposed as
+a real list of buttons; tabbing through them moves the camera, which is also the most
+direct way to check that the numbers on screen are the numbers in the data.
 
 ### UI decisions that were forced by bugs
 
@@ -215,45 +306,98 @@ bar series and two lines, computed SVG paths render on the server, so the first 
 contains the chart, a JS failure cannot blank the panel, and 395 KB of gzipped dependency
 disappeared. Tooltips are `<title>` elements: native, keyboard-accessible, no JavaScript.
 
-**The map uses dual encoding (dots *and* hexagons).** Measured: an H3 res-7 cell is ~1.1 km
-across, which is 0.23 px at zoom 5 and still under 4 px at zoom 9. Drawing only
-polygons means the map looks empty at every zoom a region-wide view needs, which is
-exactly how it shipped once. Dots have a pixel-radius floor and are always visible;
-hexagon boundaries appear from zoom 7 where the shape is legible.
+**The map attaches on `style.load`, not `isStyleLoaded()`.** `isStyleLoaded()` asks about
+*tiles*, and the data layers are added after it returns — so the guard passed, the layers
+were never added, and the map rendered 0 of its 4,392 features while the network tab showed
+every one of them arriving. This is the single most expensive bug in the dashboard, and
+nothing about it was visible from the outside except an empty map.
 
 **The camera never animates.** `fitBounds` with a duration is a *motion*, and a motion that
-does not run leaves the camera on its default centre. This map rendered zero features while
-holding 4,392 of them, for exactly that reason. Framing is now instantaneous and driven by a
-`ResizeObserver` on the container, because the container has no size until the stylesheet
-gives the grid its columns.
+does not run leaves the camera on its default centre. Framing is instantaneous and driven
+by a `ResizeObserver` on the container, because the container has no size until the
+stylesheet gives the grid its columns.
 
-**The colour ramp varies in luminance, not hue.** A red-to-green severity scale is invisible
-to the ~8% of men with red-green deficiency, and red-green is the obvious choice for severity.
-`--color-i1`..`--color-i5` run from a deep ember to near-white, and every value is also
-labelled in text, so colour is always a redundant channel.
+**The colour ramp is converted from the live tokens, not hardcoded.** `rampHex()` reads
+`--color-i1`..`--color-i5` off the document and does the oklch→sRGB transform itself. The
+hardcoded hexes had drifted from the CSS, and on the light theme — where the ramp runs light
+to dark — that meant the top step was painted near-white on white. A hand-rolled colour
+transform is exactly the kind of code that is wrong quietly, so it is verified against an
+independent reference implementation in `utils.test.ts`, for both themes, plus a contrast
+assertion that fails if any step lands within 0.05 relative luminance of the page
+background.
 
-Two accessibility details that cost nothing: focus rings are never suppressed, and
-`prefers-reduced-motion` is honoured rather than overridden.
+**The map uses dual encoding (dots *and* hexagons).** Measured: an H3 res-7 cell is ~1.1 km
+across, which is 0.23 px at zoom 5 and still under 4 px at zoom 9. Drawing only polygons
+means the map looks empty at every zoom a region-wide view needs.
 
-Seven API routes: every one is read-only, and everything it touches is precomputed.
-Nothing in the built-in views aggregates, loads a model, or infers; that work happens in
-scheduled GitHub Actions jobs, because Pages Functions have a short CPU budget on the free
-tier.
+**Colour is always redundant.** A red-to-green severity scale is invisible to the ~8% of
+men with red-green deficiency, and red-green is the obvious choice for severity.
+`--color-i1`..`--color-i5` run from a deep ember to near-white in luminance, and every
+value is also labelled in text.
 
-Three deliberate choices:
+### Two things that had to be `.astro` and not `.tsx`
 
-- **Server-rendered first paint.** `index.astro` queries Turso during the request, so
-  the HTML arrives with real numbers. Only the map and the chart are `client:only`
-  islands; everything else is static.
-- **Degradation over 500s.** Three marts depend on Sentinel data that is not backfilled,
-  so `tableExists` is checked and a missing table empties its own panel. `/api/health`
-  reports exactly which marts exist and their row counts.
-- **Hexagons are real H3 cell boundaries**, not dots. A res-7 cell is ~5 km² and a
-  res-5 cell is ~253 km²; drawing both as a uniform point would imply precision the
-  coarse layer does not have. The legend states the resolution of the layer on screen.
+`PageHeader` and `SectionLabel` are Astro components, and they have to stay that way. Astro
+passes `.astro` children to a React component as a **slot function**, not as rendered
+output — so a React component that renders `children` inside its own render pass triggers a
+nested-update warning and skips commits. The fix is not a `useEffect` around it; the fix is
+that these two components are not React.
 
-Turso credentials are Cloudflare Pages environment variables, read server-side. The
-browser only ever talks to the site's own `/api/*`.
+`useTheme` reads its initial value in the `useState` initialiser rather than in an effect,
+because a `setState` that lands during mount interrupts a sibling island's render.
+
+### shadcn/ui
+
+`components.json` is present and the registry components are aliased onto this project's
+palette through `@theme inline` in `global.css` — the token names are mapped *onto* the
+existing colours rather than a second palette being introduced, so a registry component
+lands in the design language instead of replacing it.
+
+`alert` and `table-frame` earn their place: the degraded-panels banner was hand-rolled with
+an inline `color-mix` in three separate pages, and a sticky `<th>` is decoration without a
+scroll container. `accordion`, `dropdown-menu`, `scroll-area`, `toggle-group` and `toggle`
+were installed, found to have no job here, and removed — `<details>` needs no JavaScript,
+the nav is plain links, tables scroll natively, and the period and region pickers are
+native `<select>` elements on purpose.
+
+### The dashboard's own tests
+
+```bash
+cd serving/dashboard
+npm test          # vitest, no credentials, no network
+```
+
+145 cases over the parts where a wrong answer is quietly wrong rather than loudly broken:
+the SQL deny-list (the one place a wrong answer is a security problem), the oklch→hex
+conversion, the pipeline's stage-state rules, the WebGL probe, the map projection and cell
+readout, the chart arithmetic, and the pipeline's relative-time formatting. The suite runs in
+CI before the build.
+
+They are not ceremonial. Writing them found two real bugs: `mercatorY` leaked outside the
+unit square by ~1e-9 at the poles, which shifts every projected point through the canvas fit;
+and the boundary cache handed out a live reference, so a caller mutating a ring corrupted
+every subsequent paint. The readout's separation of database strings from markup is asserted
+for the same reason — it was once a `setHTML()` call with a cell's `region_id` in it.
+
+### Degradation and access
+
+Seven API routes: every one is read-only, and everything it touches is precomputed. Nothing
+in the built-in views aggregates, loads a model, or infers; that work happens in scheduled
+GitHub Actions jobs, because Pages Functions have a short CPU budget on the free tier.
+
+- **Server-rendered first paint.** `index.astro` queries Turso during the request, so the
+  HTML arrives with real numbers. Only the map is a `client:only` island.
+- **A missing panel is named, not hidden.** Three marts depend on Sentinel data that is not
+  backfilled; `tableExists` is checked and a missing table empties its own panel, and the
+  banner at the top of the page lists exactly which.
+- **The activity strip states its own basis.** It counts every cell in the window while the
+  map draws only the densest 6,000, and when the cap bites the strip says so — otherwise a
+  bar reads as "these are the cells on the map" when some were never sent.
+- **Focus rings are never suppressed**, and `prefers-reduced-motion` is honoured rather than
+  overridden.
+
+Turso credentials are Cloudflare Pages environment variables, read server-side. The browser
+only ever talks to the site's own `/api/*`.
 
 ### Deploying
 
@@ -263,16 +407,18 @@ npm run build
 npx wrangler pages deploy dist --project-name=terrasentinel-dashboard --branch=main
 ```
 
-Two things that must be right, both of which cost time to discover:
+Three things that must be right, all of which cost time to discover:
 
-- **`compatibility_flags = ["nodejs_compat"]`** in `wrangler.toml`. Astro's image service pulls
-  in `sharp`, which requires node builtins even though this dashboard renders no images.
-  Without the flag, the worker fails to bundle.
+- **`compatibility_flags = ["nodejs_compat"]`** in `wrangler.toml`. Astro's image service
+  pulls in `sharp`, which requires node builtins even though this dashboard renders no
+  images. Without the flag, the worker fails to bundle.
 - **React 18, not 19.** React 19's server renderer uses `MessageChannel`, which workerd does
   not provide, so the worker dies at startup with `ReferenceError: MessageChannel is not
-  defined`. React 18 avoids that code path. Verified by running the built output under
-  `wrangler pages dev`, which is the only way to catch it: the Node-based `astro dev` server
-  is a different runtime and never hits it.
+  defined`. React 18 avoids that code path.
+- **`astro build` in CI, not just `astro check`.** `check` passes builds that then fail.
+  A type error that stops a build is cheap to find locally; one that only appears at
+  `wrangler pages dev` is not, so the local check of the *built output* is the only way to
+  catch the runtime items above.
 
 ## Proving it works
 
@@ -305,8 +451,12 @@ databricks/      hybrid second path: Asset Bundle, Workflows, UC DDL (paused)
 docs/            architecture diagram
 pandera_schemas/ the data contracts between layers
 tools/           synthetic lake generator, seed export, anomaly assertions
-tests/           592 tests plus a full dbt build, all offline
+tests/           592 Python tests plus a full dbt build, all offline
 ```
+
+`serving/dashboard/` carries its own suite — `npm test`, 145 cases, no credentials — for the
+reason the layout cannot express: the dashboard reads from a live database at request time,
+so the parts worth testing are the pure functions at its edge rather than its pages.
 
 ## Setup
 
@@ -379,6 +529,9 @@ python -m sync.push_gold_to_turso --duckdb-path transform/terrasentinel.duckdb -
 
 # tests
 ruff check . && python -m pytest tests/ -q
+
+# the dashboard's own suite — no credentials, no network
+cd serving/dashboard && npm ci && npm test
 ```
 
 In production the transform job reads the lake straight from the Hub instead of a local

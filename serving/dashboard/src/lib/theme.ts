@@ -12,24 +12,30 @@ export const THEME_KEY = "terrasentinel-theme";
 
 export type Theme = "dark" | "light";
 
-function current(): Theme {
+function read(): Theme {
+  if (typeof document === "undefined") return "dark";
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
 
 /**
  * Read and write the theme.
  *
- * The `MutationObserver` rather than a plain effect read, because the theme can change
- * from outside this hook: a second copy of the toggle, a browser extension, devtools.
- * Observing the attribute means the map's basemap follows the page even when the toggle
- * that changed it is a different component.
+ * The initial value is read in the state initialiser rather than in an effect. An effect
+ * that calls `setState` on mount forces every island that uses this hook through a second
+ * render, and when Astro mounts several islands in one task that update can land while a
+ * neighbouring island is mid-render, which React reports as "triggering nested component
+ * updates from render" and answers by skipping a commit. These components are all
+ * `client:only`, so reading the document during the first render is safe.
+ *
+ * The `MutationObserver` is there for a different reason: the theme can change from
+ * outside this hook, and observing the attribute means the map's basemap follows the page
+ * even when whatever changed it is not this component.
  */
 export function useTheme(): [Theme, (next: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>(read);
 
   useEffect(() => {
-    setTheme(current());
-    const observer = new MutationObserver(() => setTheme(current()));
+    const observer = new MutationObserver(() => setTheme(read()));
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);

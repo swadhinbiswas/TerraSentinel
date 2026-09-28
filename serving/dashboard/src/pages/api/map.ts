@@ -23,11 +23,45 @@ export const GET: APIRoute = async ({ request, locals }) => {
     limit: Number(url.searchParams.get("limit") ?? 6000),
   });
 
-  return new Response(JSON.stringify(payload), {
+  const body = JSON.stringify(payload);
+
+  // Strong validator over the exact bytes, so a 304 can never hand back a body the client
+  // already has but that has since changed. This matters more than it looks: a full season
+  // of daily cells is a megabyte of JSON, and without a validator every revalidation after
+  // the 300s freshness window re-downloads all of it even though the underlying data
+  // changes a few times a day. The browser revalidates transparently — no client change
+  // needed — so the saving lands on the second and later visits without anyone thinking
+  // about it.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+  const etag = `"${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
+
+  if (request.headers.get("if-none-match") === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        etag,
+        // A 304 must carry the same freshness as the 200 it replaces, or the client
+        // revalidates again immediately and the saving is thrown away.
+        "cache-control": CACHE,
+      },
+    });
+  }
+
+  return new Response(body, {
     headers: {
       "content-type": "application/json",
-      // The dataset changes on a schedule, not per request.
-      "cache-control": "public, max-age=300, stale-while-revalidate=3600",
+      etag,
+      "cache-control": CACHE,
     },
   });
 };
+
+/**
+ * Five minutes fresh, then revalidated for an hour.
+ *
+ * The pipeline publishes on a cron measured in hours, so a five-minute window is already
+ * more responsive than the data. `stale-while-revalidate` means a reader mid-interaction
+ * never waits on the origin: the browser serves the cached window immediately and updates
+ * it in the background, which is why this can be generous.
+ */
+const CACHE = "public, max-age=300, stale-while-revalidate=3600";

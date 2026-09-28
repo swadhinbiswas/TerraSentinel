@@ -135,8 +135,8 @@ export default function SqlConsole() {
             <table className="w-full border-collapse text-xs">
               <thead className="sticky top-0 bg-[var(--color-surface)]">
                 <tr>
-                  {result.columns.map((column) => (
-                    <th key={column} className="border-b border-[var(--color-border)] px-2 py-1.5 text-left font-medium text-[var(--color-muted)]">
+                  {result.columns.map((column, columnIndex) => (
+                    <th key={`${column}-${columnIndex}`} className="border-b border-[var(--color-border)] px-2 py-1.5 text-left font-medium text-[var(--color-muted)]">
                       {column}
                     </th>
                   ))}
@@ -145,8 +145,8 @@ export default function SqlConsole() {
               <tbody>
                 {result.rows.map((row, index) => (
                   <tr key={index} className="odd:bg-[color-mix(in_oklab,var(--color-surface)_60%,transparent)]">
-                    {result.columns!.map((column) => (
-                      <td key={column} className="border-b border-[var(--color-border)]/50 px-2 py-1 font-mono tabular-nums">
+                    {result.columns!.map((column, columnIndex) => (
+                      <td key={`${column}-${columnIndex}`} className="border-b border-[var(--color-border)]/50 px-2 py-1 font-mono tabular-nums">
                         {row[column] === null ? <span className="text-[var(--color-muted)]">null</span> : String(row[column])}
                       </td>
                     ))}
@@ -163,7 +163,7 @@ export default function SqlConsole() {
           <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">Examples</p>
           <ul className="space-y-1">
             {EXAMPLES.map((example) => (
-              <li>
+              <li key={example.label}>
                 <button
                   type="button"
                   onClick={() => setSql(example.sql)}

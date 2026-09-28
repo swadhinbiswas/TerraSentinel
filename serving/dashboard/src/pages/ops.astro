@@ -2,10 +2,11 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Stat } from "@/components/ui/stat";
-import { Table, Td, Th } from "@/components/ui/table";
+import { Table, TableFrame, Td, Th } from "@/components/ui/table";
 import { opsReport } from "@/lib/queries";
 import { turso } from "@/lib/turso";
 import Layout from "@/layouts/Layout.astro";
+import PageHeader from "@/components/ui/page-header.astro";
 
 export const prerender = false;
 
@@ -34,6 +35,17 @@ const statusTone = (status: string) =>
 ---
 
 <Layout title="TerraSentinel — operations" description="Workflow runs, data freshness and model version.">
+  <PageHeader
+    eyebrow="Operations"
+    title="Run history, data freshness and the model in service"
+  >
+    <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+      Everything here is read from the serving database. The
+      <a href="/pipeline" class="text-[var(--color-accent)] underline decoration-dotted">pipeline page</a>
+      shows the same state as a flow, and refreshes on its own.
+    </p>
+  </PageHeader>
+
   <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
     <Stat label="Tables live" value={report.pageSize.tables} />
     <Stat label="Rows served" value={report.pageSize.rows.toLocaleString()} />
@@ -58,7 +70,7 @@ const statusTone = (status: string) =>
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
-        <Table>
+        <TableFrame><Table>
           <thead><tr><Th>Table</Th><Th>Newest observation</Th><Th>Days behind</Th><Th>Budget</Th><Th>State</Th></tr></thead>
           <tbody>
             {report.freshness.map((row) => {
@@ -86,7 +98,7 @@ const statusTone = (status: string) =>
             })}
           </tbody>
         </Table>
-      </CardContent>
+      </TableFrame></CardContent>
     </Card>
   </section>
 
@@ -100,7 +112,7 @@ const statusTone = (status: string) =>
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
-        <Table>
+        <TableFrame><Table>
           <thead><tr><Th>Workflow</Th><Th>Status</Th><Th>Started</Th><Th>Duration</Th><Th>Rows</Th><Th>Failed units</Th></tr></thead>
           <tbody>
             {report.runs.length === 0 && (
@@ -118,7 +130,7 @@ const statusTone = (status: string) =>
             ))}
           </tbody>
         </Table>
-      </CardContent>
+      </TableFrame></CardContent>
       <CardContent className="pt-0 text-xs text-[var(--color-muted)]">
         {report.runsByStatus.length > 0 && (
           <p>

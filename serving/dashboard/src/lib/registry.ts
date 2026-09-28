@@ -33,11 +33,42 @@ export interface TableMeta {
    *  Declared rather than probed: a wrong guess becomes invalid SQL, and this type is
    *  the allowlist that makes the explorer safe. */
   hasRegion?: boolean;
+  /** The `sources.source_id` rows this mart is built from, or `[]` when nothing upstream
+   *  feeds it — an internal table, or configuration.
+   *
+   *  Declared rather than matched against `TableMeta.source`, because that field is prose
+   *  carrying a licence attribution and is free to be reworded at any time. Inferring
+   *  provenance from it would make "is this source on the dashboard?" depend on string
+   *  matching, and the failure mode is a false answer in whichever direction the reword
+   *  happened to move. `flow.ts` inverts this field to report, per source, whether its
+   *  data reaches a page — which is how ENTSO-E came to be visibly collected-but-unserved
+   *  rather than quietly assumed to be served. */
+  sourceIds?: string[];
+}
+
+/**
+ * The marts each source's data reaches, keyed by `sources.source_id`.
+ *
+ * Inverted from `TableMeta.sourceIds` so there is exactly one place a mart's provenance is
+ * written down. A source with no entry has data in the lake and nothing on a page, which is
+ * a gap in the dashboard and not a claim about the collector.
+ */
+export function martsBySource(): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const table of TABLE_REGISTRY) {
+    for (const id of table.sourceIds ?? []) {
+      const list = out.get(id) ?? [];
+      list.push(table.name);
+      out.set(id, list);
+    }
+  }
+  return out;
 }
 
 export const TABLE_REGISTRY: TableMeta[] = [
   {
     name: "gold_fire_anomalies",
+    sourceIds: ["firms"],
     hasRegion: true,
     title: "Fire anomalies by region and day",
     domain: "fire",
@@ -49,6 +80,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "gold_h3_fire",
+    sourceIds: ["firms"],
     hasRegion: true,
     title: "Fire detections per H3 cell",
     domain: "fire",
@@ -60,6 +92,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "gold_ice_extent_trends",
+    sourceIds: ["noaa_nsidc"],
     hasRegion: true,
     title: "Sea-ice extent vs the 1981–2010 normal",
     domain: "cryosphere",
@@ -71,6 +104,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "gold_h3_sst",
+    sourceIds: ["noaa_nsidc"],
     hasRegion: true,
     title: "Sea-surface temperature anomaly per H3 cell",
     domain: "marine",
@@ -82,6 +116,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "gold_deforestation_index",
+    sourceIds: ["sentinel"],
     hasRegion: true,
     title: "Deforestation index (NDVI, year-over-year)",
     domain: "vegetation",
@@ -93,6 +128,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "gold_glacier_backscatter",
+    sourceIds: ["sentinel"],
     hasRegion: true,
     title: "Glacier SAR backscatter trend",
     domain: "cryosphere",
@@ -104,6 +140,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "gold_h3_sentinel",
+    sourceIds: ["sentinel"],
     hasRegion: true,
     title: "Vegetation and glacier change per H3 cell",
     domain: "vegetation",
@@ -115,6 +152,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "ml_predictions",
+    sourceIds: ["firms", "sentinel", "noaa_nsidc"],
     hasRegion: true,
     title: "Model anomaly scores",
     domain: "operations",
@@ -127,6 +165,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "pipeline_runs",
+    sourceIds: [],
     title: "Workflow run history",
     domain: "operations",
     description:
@@ -138,6 +177,7 @@ export const TABLE_REGISTRY: TableMeta[] = [
   },
   {
     name: "sources",
+    sourceIds: [],
     title: "Source registry",
     domain: "operations",
     description:

@@ -2,21 +2,24 @@
 import SqlConsole from "@/components/SqlConsole";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Layout from "@/layouts/Layout.astro";
+import PageHeader from "@/components/ui/page-header.astro";
 
 export const prerender = false;
 ---
 
 <Layout title="TerraSentinel — SQL console" description="Guarded read-only SQL over the serving database.">
-  <section class="mb-4 max-w-3xl">
-    <h2 class="text-xl font-semibold tracking-tight">SQL console</h2>
-    <p class="mt-2 text-sm text-[var(--color-muted)]">
+  <PageHeader
+    eyebrow="Guarded read-only"
+    title="SQL console"
+  >
+    <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
       A real SQL console against the same database the dashboard reads. The guard is
       server-side and refuses rather than sanitises: one statement, SELECT or WITH only, no
       comments, and a row cap applied when the query does not limit itself. Several worked
       examples are preloaded, including the ones behind the
       <a href="/stories" class="text-[var(--color-accent)] underline decoration-dotted">stories</a>.
     </p>
-  </section>
+  </PageHeader>
 
   <Card>
     <CardHeader>

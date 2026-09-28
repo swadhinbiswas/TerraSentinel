@@ -19,6 +19,7 @@ const NAV = [
   { href: "/", label: "Overview" },
   { href: "/analysis", label: "Analysis" },
   { href: "/stories", label: "Stories" },
+  { href: "/pipeline", label: "Pipeline" },
   { href: "/catalog", label: "Catalog" },
   { href: "/explorer", label: "Explorer" },
   { href: "/sql", label: "SQL" },
@@ -100,7 +101,7 @@ try {
             </svg>TerraSentinel
           </a>
           <p class="text-xs text-[var(--color-muted)]">
-            Satellite anomaly detection over EU study regions: wildfire, deforestation, cryosphere
+            Satellite anomaly detection over EU study regions: wildfire, sea ice, sea temperature
           </p>
         </div>
         <div class="mt-3 flex items-center gap-2">
@@ -108,14 +109,23 @@ try {
           {NAV.map((item) => (
             <a
               href={item.href}
+              aria-current={isActive(item.href) ? "page" : undefined}
               class:list={[
-                "rounded-t border-b-2 px-3 py-2 transition-colors",
+                "relative rounded-t px-3 py-2 transition-colors",
                 isActive(item.href)
-                  ? "border-[var(--color-accent)] text-[var(--color-foreground)]"
-                  : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-foreground)]",
+                  ? "text-[var(--color-foreground)]"
+                  : "text-[var(--color-muted)] hover:text-[var(--color-foreground)]",
               ]}
             >
               {item.label}
+              {/* An underline rather than a full-width border, so the active tab is marked
+                  without the row's baseline shifting when a tab is added to the nav. */}
+              {isActive(item.href) && (
+                <span
+                  class="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
+                  aria-hidden="true"
+                />
+              )}
             </a>
             ))}
           </nav>
@@ -123,25 +133,39 @@ try {
         </div>
       </header>
 
-      <main class="flex-1 px-4 py-5">
-        <slot />
+      <main class="page-grid relative flex-1 px-4 py-6">
+        <div class="relative">
+          <slot />
+        </div>
       </main>
 
-      <footer class="border-t border-[var(--color-border)] px-4 py-4 text-xs text-[var(--color-muted)]">
-        <p class="mb-1 font-medium text-[var(--color-foreground)]">Data attribution</p>
-        <ul class="flex flex-wrap gap-x-4 gap-y-1">
-          {attribution.map((item) => (
-            <li>{item.attribution}</li>
-          ))}
-        </ul>
-        <p class="mt-2">
-          Anomaly scores are statistical comparisons against each region's own seasonal baseline,
-          or against the published NSIDC 1981–2010 normal. They are not official hazard warnings.
-        </p>
-        <p class="mt-1">
-          Data is refreshed by scheduled GitHub Actions workflows; every figure on this site is a
-          query against the serving database rather than a cached copy.
-        </p>
+      <footer class="border-t border-[var(--color-border)] px-4 py-5 text-xs text-[var(--color-muted)]">
+        <div class="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+          <div>
+            <p class="mb-1.5 text-[11px] font-medium uppercase tracking-widest text-[var(--color-subtle)]">
+              Data attribution
+            </p>
+            <ul class="space-y-1">
+              {attribution.map((item) => (
+                <li class="leading-relaxed">{item.attribution}</li>
+              ))}
+            </ul>
+          </div>
+          <div class="space-y-1.5 leading-relaxed">
+            <p>
+              Anomaly scores are statistical comparisons against each region's own seasonal
+              baseline, or against the published NSIDC 1981–2010 normal. They are not official
+              hazard warnings.
+            </p>
+            <p>
+              Data is refreshed by scheduled GitHub Actions workflows; every figure on this site
+              is a query against the serving database rather than a cached copy.{" "}
+              <a href="/pipeline" class="text-[var(--color-accent)] underline decoration-dotted">
+                See the pipeline
+              </a>.
+            </p>
+          </div>
+        </div>
       </footer>
     </div>
   </body>

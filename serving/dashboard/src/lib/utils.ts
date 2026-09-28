@@ -68,19 +68,6 @@ export function rampHex(): string[] {
   return parsed.every((value): value is string => value !== null) ? parsed : [...RAMP_FALLBACK];
 }
 
-export function severityColor(severity: string, ramp: string[] = rampHex()): string {
-  switch (severity) {
-    case "extreme":
-      return ramp[4];
-    case "high":
-      return ramp[3];
-    case "moderate":
-      return ramp[2];
-    default:
-      return ramp[0];
-  }
-}
-
 /** Map a value to a ramp step given data-driven breaks. */
 export function rampStep(value: number, breaks: number[]): number {
   let step = 0;
@@ -93,9 +80,4 @@ export function rampStep(value: number, breaks: number[]): number {
 export function formatNumber(value: number | null | undefined, digits = 0): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   return value.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
-}
-
-export function formatPercent(value: number | null | undefined, digits = 0): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  return `${(value * 100).toFixed(digits)}%`;
 }

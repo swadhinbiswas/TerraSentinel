@@ -1,9 +1,10 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 /*
  * Design tokens.
  *
- * Two things here are deliberate rather than decorative:
+ * Three decisions here, none of them decoration:
  *
  * 1. **Semantic names.** `--color-surface` beats `--color-slate-800` because it can be
  *    redefined per theme without touching a component.
@@ -13,10 +14,20 @@
  *    varies in hue alone (green→red) is invisible to the ~8% of men with red-green
  *    deficiency, and red-green is exactly the obvious choice for a severity ramp. Every
  *    value is also labelled in text, so colour is never the only channel.
+ *
+ * 3. **shadcn's names are aliases, not a second palette.** Registry components are written
+ *    against `bg-card`, `text-muted-foreground` and friends. Those resolve here through
+ *    `--color-card` and friends rather than through shadcn's own slate/zinc ramp, so a
+ *    component pulled from the registry lands in this design language instead of beside
+ *    it. `--color-primary` is the ember accent, which is what makes a shadcn button look
+ *    like it belongs next to this project's map legend.
  */
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, "Liberation Mono", monospace;
+
+  --radius-card: 0.75rem;
+  --radius-panel: 1rem;
 
   /* dark (default) */
   --color-background: oklch(0.145 0.008 265);
@@ -36,8 +47,38 @@
   --color-i3: oklch(0.72 0.15 62);
   --color-i4: oklch(0.80 0.17 78);
   --color-i5: oklch(0.93 0.11 95);
+}
 
-  --radius-card: 0.75rem;
+/*
+ * shadcn's token names, resolved onto the palette above.
+ *
+ * `@theme inline` rather than a second `@theme` block so these reference the live values
+ * instead of copying them, which is what stops the two drifting apart on the next theme
+ * change. `--color-ring` follows the accent so shadcn's focus ring matches the rest.
+ */
+@theme inline {
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-foreground);
+  --color-popover: var(--color-surface-raised);
+  --color-popover-foreground: var(--color-foreground);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-accent-foreground);
+  --color-secondary: var(--color-surface-raised);
+  --color-secondary-foreground: var(--color-foreground);
+  --color-muted-foreground: var(--color-muted);
+  --color-accent-foreground-strong: var(--color-accent-foreground);
+  --color-destructive: var(--color-i5);
+  --color-destructive-foreground: oklch(0.16 0.02 52);
+  --color-ring: var(--color-accent);
+  --color-input: var(--color-border-strong);
+  --color-sidebar: var(--color-surface);
+  --color-sidebar-foreground: var(--color-foreground);
+  --color-sidebar-primary: var(--color-accent);
+  --color-sidebar-primary-foreground: var(--color-accent-foreground);
+  --color-sidebar-accent: var(--color-surface-raised);
+  --color-sidebar-accent-foreground: var(--color-foreground);
+  --color-sidebar-border: var(--color-border);
+  --color-sidebar-ring: var(--color-accent);
 }
 
 [data-theme="light"] {
@@ -62,6 +103,8 @@
 html {
   color-scheme: dark;
   scrollbar-color: var(--color-border-strong) transparent;
+  /* Anchors land under a sticky header without a scroll-margin on every heading. */
+  scroll-padding-top: 5.5rem;
 }
 
 [data-theme="light"] html,
@@ -75,6 +118,8 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Prevents the layout shift a scrollbar appearing/disappearing causes on page change. */
+  scrollbar-gutter: stable;
 }
 
 /* Tabular figures wherever numbers line up in columns or axes, so digits do not jump. */
@@ -103,6 +148,177 @@ table th {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * Motion.
+ *
+ * One duration and one curve, so transitions across the app share a rhythm instead of
+ * each component picking its own. `--ease-out` is decelerating, which is what reads as
+ * "settling" rather than "starting".
+ */
+:root {
+  --duration-fast: 120ms;
+  --duration: 200ms;
+  --duration-slow: 380ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Elevation. Two levels only: a lift for anything that floats, and a cast for the map
+   popup and the popovers, which sit above a canvas rather than on the page. */
+.shadow-lift {
+  box-shadow:
+    0 1px 2px oklch(0 0 0 / 0.16),
+    0 4px 16px -4px oklch(0 0 0 / 0.28);
+}
+.shadow-cast {
+  box-shadow:
+    0 2px 6px oklch(0 0 0 / 0.2),
+    0 16px 40px -12px oklch(0 0 0 / 0.42);
+}
+[data-theme="light"] .shadow-lift {
+  box-shadow:
+    0 1px 2px oklch(0.2 0.02 265 / 0.06),
+    0 4px 16px -6px oklch(0.2 0.02 265 / 0.12);
+}
+[data-theme="light"] .shadow-cast {
+  box-shadow:
+    0 2px 6px oklch(0.2 0.02 265 / 0.08),
+    0 16px 40px -12px oklch(0.2 0.02 265 / 0.18);
+}
+
+/* A card that responds to the pointer. The border warms rather than the whole surface
+   lightening, which keeps the fill readable and the change small. */
+.card-interactive {
+  transition:
+    border-color var(--duration) var(--ease-out),
+    box-shadow var(--duration) var(--ease-out),
+    transform var(--duration) var(--ease-out);
+}
+.card-interactive:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-lift, 0 4px 16px -4px oklch(0 0 0 / 0.28));
+}
+
+/*
+ * A faint topographic grid behind the page.
+ *
+ * The dashboard is about geospatial data, and a flat field of panels does not say that.
+ * The grid is two gradients at 3% opacity, fixed to the viewport so it reads as paper
+ * rather than as content, and it stops at the first panel because the panels are opaque.
+ */
+/* The grid lives on a pseudo-element, not on the element itself. `mask-image` masks
+   whatever it is applied to *including descendants*, so putting it on <main> faded the
+   page's own text out below the first screenful. */
+.page-grid {
+  position: relative;
+  isolation: isolate;
+}
+.page-grid::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--color-foreground) 2.5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--color-foreground) 2.5%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+  /* Faded out below the first screenful. A grid that runs the whole height of a long page
+     stops reading as paper and starts reading as a rendering fault. */
+  mask-image: linear-gradient(to bottom, black 0, black 20rem, transparent 44rem);
+}
+
+/* The travelling highlight along a pipeline connector. Two gradients, one static and one
+   animated, masked to a single 2px line so the motion reads as flow along a wire. */
+@keyframes ts-flow {
+  from {
+    background-position: -160px 0, 0 0;
+  }
+  to {
+    background-position: 160px 0, 0 0;
+  }
+}
+
+.flow-wire {
+  background-image:
+    linear-gradient(90deg, transparent, var(--color-accent) 50%, transparent),
+    linear-gradient(90deg, var(--color-border-strong) 1px, transparent 1px);
+  background-size: 160px 100%, 8px 100%;
+  background-repeat: no-repeat, repeat-x;
+  background-position: center, center;
+  animation: ts-flow 2.6s var(--ease-in-out) infinite;
+}
+/* The stacked layout hangs the wire below each card, so it needs a vertical gradient. The
+   horizontal one is a 160px-wide sweep, which on a 1px column is a single flat colour. */
+@keyframes ts-flow-v {
+  from {
+    background-position: 0 -160px, 0 0;
+  }
+  to {
+    background-position: 0 160px, 0 0;
+  }
+}
+.flow-wire-v {
+  background-image:
+    linear-gradient(to bottom, transparent, var(--color-accent) 50%, transparent),
+    linear-gradient(to bottom, var(--color-border-strong) 1px, transparent 1px);
+  background-size: 100% 160px, 100% 8px;
+  background-repeat: no-repeat, repeat-y;
+  background-position: center, center;
+  animation: ts-flow-v 2.6s var(--ease-in-out) infinite;
+}
+.flow-wire-v-idle {
+  background-image: linear-gradient(to bottom, var(--color-border-strong) 1px, transparent 1px);
+  background-size: 100% 8px;
+  background-repeat: repeat-y;
+}
+.flow-wire-v-stalled {
+  background-image: linear-gradient(to bottom, var(--color-i1) 1px, transparent 1px);
+  background-size: 100% 8px;
+  background-repeat: repeat-y;
+  opacity: 0.6;
+}
+
+.flow-wire-idle {
+  background-image: linear-gradient(90deg, var(--color-border-strong) 1px, transparent 1px);
+  background-size: 8px 100%;
+  background-repeat: repeat-x;
+}
+.flow-wire-stalled {
+  background-image: linear-gradient(90deg, var(--color-i1) 1px, transparent 1px);
+  background-size: 8px 100%;
+  background-repeat: repeat-x;
+  opacity: 0.6;
+}
+
+/* A slow breathing halo, for the one node that is the current subject of the page. */
+@keyframes ts-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+.pulse-ring {
+  animation: ts-pulse 2.4s var(--ease-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-wire,
+  .flow-wire-v {
+    animation: none;
+  }
+  .pulse-ring {
+    animation: none;
+    opacity: 0.35;
   }
 }
 

@@ -1,0 +1,49 @@
+---
+/**
+ * The page header every route opens with.
+ *
+ * The title, the orientation paragraph and the optional action slot were being re-spelled
+ * on each page, which is how a set of pages drifts into looking like eight different
+ * products. One component, so the rhythm is identical everywhere.
+ *
+ * This is an `.astro` component rather than a React one, and that matters. A React
+ * component used from an `.astro` file receives its template children as a *function* that
+ * Astro calls to render the slot, so rendering it inside React's render pass triggers an
+ * update while React is rendering — which React reports as "Check the render method of
+ * `<X>`" and which skips a commit. There is no interactivity here to justify a framework
+ * boundary, so the component stays on Astro's side of it and uses a real `<slot />`.
+ */
+interface Props {
+  title: string;
+  /** Plain-text lede, for the pages that do not need a link in it. */
+  lede?: string;
+  /** A small label above the title, naming the subject rather than the page. */
+  eyebrow?: string;
+}
+
+const { title, lede, eyebrow } = Astro.props;
+---
+
+<div class="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+  <div class="max-w-3xl">
+    {
+      eyebrow && (
+        <p class="mb-1 text-[11px] font-medium uppercase tracking-widest text-[var(--color-accent)]">
+          {eyebrow}
+        </p>
+      )
+    }
+    <h1 class="text-2xl font-semibold tracking-tight text-balance">{title}</h1>
+    {
+      lede && (
+        <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)] text-pretty">
+          {lede}
+        </p>
+      )
+    }
+    <slot />
+  </div>
+  <slot name="actions" />
+</div>
+
+<!-- A section rule with a label, for splitting a long page without another heading level. -->

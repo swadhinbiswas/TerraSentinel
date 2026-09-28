@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { loadStories } from "@/lib/stories";
 import { turso } from "@/lib/turso";
 import Layout from "@/layouts/Layout.astro";
+import PageHeader from "@/components/ui/page-header.astro";
 
 export const prerender = false;
 
@@ -14,16 +15,18 @@ const stories = await loadStories(turso(env));
 ---
 
 <Layout title="TerraSentinel — stories" description="Documented anomalies, read from the data at render time.">
-  <section class="mb-6 max-w-3xl">
-    <h2 class="text-xl font-semibold tracking-tight">Four things worth looking at</h2>
-    <p class="mt-2 text-sm text-[var(--color-muted)]">
+  <PageHeader
+    eyebrow="Documented events"
+    title="Four things worth looking at"
+  >
+    <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
       Each write-up is generated from a live query, so the numbers are read from the serving
       database when the page renders instead of being written once and going stale. The SQL
       behind each story is shown so you can check it yourself, or open it in the
       <a href="/sql" class="text-[var(--color-accent)] underline decoration-dotted">SQL console</a>.
       Where the two detectors disagree, the write-up says so.
     </p>
-  </section>
+  </PageHeader>
 
   <div class="space-y-6">
     {stories.map((story) => (

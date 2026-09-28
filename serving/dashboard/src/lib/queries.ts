@@ -100,7 +100,10 @@ export function degraded(results: PanelResult<unknown>[]): string[] {
   return results.flatMap((result) => (result.error ? [result.error] : []));
 }
 
-/** What a failed map panel renders with: the right shape, nothing to show. */
+/**
+ * The window's shape with no cells in it, for a panel that failed and for a page that only
+ * needs the summary. `MapWindow` minus the cells.
+ */
 export const EMPTY_MAP_WINDOW: MapWindow = {
   layer: "fire",
   from: "",
@@ -117,6 +120,17 @@ export const EMPTY_MAP_WINDOW: MapWindow = {
   activity: [],
   truncated: false,
 };
+
+/**
+ * A window with everything except its cells.
+ *
+ * The map island needs the window's shape on the first render — the legend and the meta row
+ * read from it — but not 4,392 polygons. Passing this instead of the whole window is the
+ * difference between a 50KB page and a 1.7MB one; see `AnomalyMap`'s `initial` prop.
+ */
+export function mapWindowSummary(window: MapWindow): MapWindow {
+  return { ...window, cells: [] };
+}
 
 export async function tableExists(client: Client, table: string): Promise<boolean> {
   const result = await client.execute({
@@ -329,8 +343,15 @@ export async function mapWindow(
   // both study regions spans 38 degrees of longitude, and at that scale individual cells
   // are invisible. Scoped to one region the same week frames at a zoom where the data
   // reads.
-  const regionClause = options.region ? "and h.region_id = ?" : "";
-  const regionArgs = options.region ? [options.region] : [];
+  //
+  // `all` is the value the map's own region picker shows for "Both regions", so this API
+  // has to understand it: interpolated as a region_id it matched no row, and the call
+  // returned an empty window with a total of zero — which reads as "no data in this period"
+  // rather than as a bad parameter. The island omits the parameter instead, so this is the
+  // only guard on it.
+  const scoped = options.region && options.region !== "all" ? options.region : null;
+  const regionClause = scoped ? "and h.region_id = ?" : "";
+  const regionArgs = scoped ? [scoped] : [];
 
   const cells = await client.execute({
     sql: `select h.h3_index, h.region_id, h.latitude, h.longitude, h.period_start,
@@ -391,7 +412,10 @@ export async function mapWindow(
       from: String(bounds.rows[0]?.lo ?? "").slice(0, 10),
       to: String(bounds.rows[0]?.hi ?? "").slice(0, 10),
     },
-    region: options.region ?? null,
+    // The echo carries the region actually applied, not the one asked for. `all`
+    // means unscoped, and reporting it as a filter would be a false claim about the
+    // window.
+    region: options.region && options.region !== "all" ? options.region : null,
     cells: rows,
     breaks,
     domain: { min: num("min_v", 0), max: num("max_v", 0) },
@@ -400,26 +424,6 @@ export async function mapWindow(
     activity: activity.rows as unknown as MapWindow["activity"],
     truncated: num("n", 0) > rows.length,
   };
-}
-
-export async function mapCells(
-  client: Client,
-  options: { layer?: string; sinceDays?: number; minValue?: number; limit?: number } = {},
-): Promise<MapCell[]> {
-  const { layer = "fire", sinceDays = 30, minValue = 1, limit = 4000 } = options;
-  const table = layer === "sst" ? "gold_h3_sst" : "gold_h3_fire";
-  if (!(await tableExists(client, table))) return [];
-
-  const result = await client.execute({
-    sql: `select h3_index, region_id, latitude, longitude, period_start, metric_type,
-                 spatial_scope, value
-          from ${table}
-          where period_start >= date('now', ?) and value >= ?
-          order by value desc
-          limit ?`,
-    args: [windowModifier(sinceDays), minValue, limit],
-  });
-  return result.rows as unknown as MapCell[];
 }
 
 export async function health(client: Client): Promise<HealthReport> {

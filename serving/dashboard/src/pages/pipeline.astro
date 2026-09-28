@@ -1,0 +1,384 @@
+---
+import { TriangleAlert, AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Table2 } from "lucide-react";
+import { flowReport } from "@/lib/flow";
+import { degraded, safe } from "@/lib/queries";
+import { turso } from "@/lib/turso";
+import FlowRail from "@/components/flow/FlowRail";
+import { compactNumber, duration, relativeTime } from "@/components/flow/meta";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import PageHeader from "@/components/ui/page-header.astro";
+import { Progress } from "@/components/ui/progress";
+import { Stat } from "@/components/ui/stat";
+import { Table, TableFrame, Td, Th } from "@/components/ui/table";
+import Layout from "@/layouts/Layout.astro";
+
+export const prerender = false;
+
+interface RunRow {
+  workflow: string;
+  status: string;
+  started_at: string;
+  duration_s: number | null;
+  rows_written: number;
+  failed_units: number;
+}
+
+const RUN_LOG_SQL = `select workflow, status, started_at, duration_s, rows_written, failed_units
+                       from pipeline_runs order by started_at desc limit 12`;
+
+const env = Astro.locals.runtime?.env ?? import.meta.env;
+const client = turso(env);
+
+// The flow report is the page. The run log is a second query behind the same boundary, so
+// a failure in one still renders the other rather than 500-ing the page.
+const [flow, runs] = await Promise.all([
+  safe("Pipeline", () => flowReport(client), null),
+  safe(
+    "Run log",
+    async () => {
+      const result = await client.execute(RUN_LOG_SQL);
+      return result.rows as unknown as RunRow[];
+    },
+    [],
+  ),
+]);
+
+const report = flow.data;
+const runLog = runs.data;
+const problems = degraded([flow, runs]);
+const now = report?.generatedAt ? Date.parse(report.generatedAt) : Date.now();
+
+const martRows = report?.marts ?? [];
+const late = martRows.filter((mart) => mart.present && mart.daysBehind !== null && mart.daysBehind > mart.budgetDays);
+const absent = martRows.filter((mart) => !mart.present);
+---
+
+<Layout
+  title="TerraSentinel — pipeline"
+  description="How the data moves, from four collectors to this page, with live run status."
+>
+  {
+    problems.length > 0 && (
+      <Alert
+        variant="destructive"
+        className="mb-6 border-[color-mix(in_oklab,var(--color-i4)_45%,transparent)] bg-[color-mix(in_oklab,var(--color-i4)_8%,var(--color-surface))] text-[var(--color-foreground)]"
+      >
+        <TriangleAlert aria-hidden="true" />
+        <div>
+          <p class="font-medium">Some panels could not load</p>
+          <AlertDescription className="text-[var(--color-muted)]">
+            <ul class="list-inside list-disc text-sm">
+              {problems.map((problem) => <li>{problem}</li>)}
+            </ul>
+              <p class="mt-1 text-xs">
+                Everything else on this page is current; only the panels named above are
+                missing. Nothing here is showing a cached or invented number.
+              </p>
+          </AlertDescription>
+        </div>
+      </Alert>
+    )
+  }
+  <PageHeader
+    eyebrow="From four collectors to this page"
+    title="How the data gets here"
+  >
+    <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+      Six stages, all of them scheduled work on free tiers. Everything below is read from the
+      serving database at request time, so a stage that has gone quiet says so here rather
+      than on a page you have to remember to check. A reader can watch a stage fall overdue
+      by leaving this page open.
+    </p>
+  </PageHeader>
+
+  {report && (
+    <>
+      <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat
+          label="Tables live"
+          value={`${report.totals.tables} of ${report.totals.tablesTotal}`}
+          hint="tables in the registry"
+        />
+        <Stat label="Rows served" value={compactNumber(report.totals.rows)} hint="across every live table" />
+        <Stat
+          label="Runs recorded"
+          value={report.totals.runs.toLocaleString()}
+          hint={
+            report.totals.successRate === null
+              ? "no history yet"
+              : `${Math.round(report.totals.successRate * 100)}% succeeded`
+          }
+        />
+        <Stat
+          label="Model"
+          value={report.model ? report.model.version.split(":").pop() ?? "—" : "not scored yet"}
+          hint={report.model ? `${compactNumber(report.model.predictions)} predictions` : "batch scoring has not run"}
+          mono
+        />
+      </section>
+
+      <section class="mb-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>The flow</CardTitle>
+            <CardDescription>
+              A stage is late when its last run is older than the budget its cron implies. A
+              fire feed is late after a few days; a weekly retrain is not late for a week.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FlowRail client:only="react" initial={report} />
+          </CardContent>
+        </Card>
+      </section>
+
+      <section class="mb-5 grid gap-5 lg:grid-cols-[1.25fr_1fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Upstream sources</CardTitle>
+            <CardDescription>
+              Four providers, each on its own cadence. Credential state is read from the
+              registry the pipeline writes on every run, so it reflects what the last
+              collection actually found. The second badge on each card is a separate fact:
+              whether anything on this dashboard is built from the source. Collecting and
+              serving are different stages, and only one of them is a promise to a reader.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {report.sources.map((source) => (
+              <div class="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium leading-tight">{source.label}</p>
+                    <p class="mt-0.5 text-[11px] text-[var(--color-subtle)]">
+                      {source.cadence} · {source.metrics} metric{source.metrics === 1 ? "" : "s"} ·
+                      H3 res {source.h3Resolution}
+                    </p>
+                  </div>
+                  <div class="flex shrink-0 flex-wrap items-center gap-1.5">
+                    {source.blocked ? (
+                      <Badge tone="muted">
+                        <KeyRound className="h-3 w-3" aria-hidden="true" />
+                        credentials missing
+                      </Badge>
+                    ) : (
+                      <Badge tone="moderate">
+                        <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                        collecting
+                      </Badge>
+                    )}
+                    {source.servedBy.length > 0 ? (
+                      <Badge tone="extreme">
+                        <Table2 className="h-3 w-3" aria-hidden="true" />
+                        on {source.servedBy.length} table{source.servedBy.length === 1 ? "" : "s"}
+                      </Badge>
+                    ) : (
+                      <Badge tone="muted">
+                        <Table2 className="h-3 w-3" aria-hidden="true" />
+                        not on a page
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                {source.servedBy.length === 0 ? (
+                  <p class="mt-2 text-[11px] leading-relaxed text-[var(--color-muted)]">
+                    This source is being collected and the data is in the lake, but no gold
+                    mart has been built from it, so nothing here can show it yet. The
+                    collection is not the gap; the mart layer is.
+                  </p>
+                ) : (
+                  <p class="mt-2 text-[11px] leading-relaxed text-[var(--color-muted)]">
+                    Feeds{" "}
+                    {source.servedBy.map((mart, index) => (
+                      <>
+                        {index > 0 && ", "}
+                        <code class="font-mono text-[10px] text-[var(--color-foreground)]">
+                          {mart}
+                        </code>
+                      </>
+                    ))}
+                    .
+                  </p>
+                )}
+
+                {source.credentials.length > 0 && (
+                  <ul class="mt-2 flex flex-wrap gap-1.5">
+                    {source.credentials.map((entry) => (
+                      <li
+                        class:list={[
+                          "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]",
+                          entry.present
+                            ? "border-[var(--color-i2)]/40 text-[var(--color-i2)]"
+                            : "border-dashed border-[var(--color-border-strong)] text-[var(--color-subtle)]",
+                        ]}
+                      >
+                        {entry.name}
+                        <span aria-hidden="true">{entry.present ? "✓" : "—"}</span>
+                        <span class="sr-only">{entry.present ? "present" : "missing"}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <p class="mt-2 text-[11px] leading-relaxed text-[var(--color-muted)]">
+                  {source.attribution}
+                </p>
+
+                {source.docsUrl && (
+                  <a
+                    href={source.docsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--color-accent)] underline decoration-dotted"
+                  >
+                    <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                    Provider documentation
+                  </a>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Mart freshness</CardTitle>
+            <CardDescription>
+              Days since the newest observation in each table, against a per-table budget.
+              {late.length > 0
+                ? ` ${late.length} table${late.length === 1 ? " is" : "s are"} past budget.`
+                : " Everything dated is inside its budget."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3.5">
+            {martRows.map((mart) => {
+              const behind = mart.daysBehind ?? 0;
+              const ratio =
+                mart.present && mart.daysBehind !== null
+                  ? Math.min(100, (behind / mart.budgetDays) * 100)
+                  : 0;
+              const isLate = mart.present && mart.daysBehind !== null && behind > mart.budgetDays;
+              return (
+                <div>
+                  <div class="flex items-baseline justify-between gap-3">
+                    <p class="truncate font-mono text-xs">{mart.name}</p>
+                    <p class="shrink-0 text-[11px] tabular-nums text-[var(--color-subtle)]">
+                      {mart.present ? `${behind}d / ${mart.budgetDays}d` : "absent"}
+                    </p>
+                  </div>
+                  <Progress
+                    value={ratio}
+                    className={`mt-1.5 h-1.5 ${
+                      !mart.present
+                        ? "opacity-40"
+                        : isLate
+                          ? "[&>div]:bg-[var(--color-i5)]"
+                          : "[&>div]:bg-[var(--color-i2)]"
+                    }`}
+                  />
+                  <p class="mt-1 text-[10px] text-[var(--color-subtle)]">
+                    {mart.rows === null
+                      ? mart.blockedBy
+                        ? `blocked by ${mart.blockedBy}`
+                        : "no rows"
+                      : `${compactNumber(mart.rows)} rows · last ${mart.lastValue ?? "—"}`}
+                  </p>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section class="mb-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent runs</CardTitle>
+            <CardDescription>
+              Written on completion, including failures, by every workflow that reaches the
+              run-recording step. A run that stopped happening leaves a gap, which is what
+              this table exists to show.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto p-0">
+            <TableFrame><Table>
+              <thead>
+                <tr>
+                  <Th>Workflow</Th><Th>Status</Th><Th>Started</Th><Th>Duration</Th>
+                  <Th>Rows</Th><Th>Failed units</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {runLog.length === 0 && (
+                  <tr>
+                    <Td colSpan={6} className="text-[var(--color-muted)]">
+                      No runs recorded yet.
+                    </Td>
+                  </tr>
+                )}
+                {runLog.map((run) => (
+                  <tr>
+                    <Td className="font-mono">{run.workflow}</Td>
+                    <Td>
+                      <Badge tone={run.status === "success" ? "moderate" : "extreme"} dot>
+                        {run.status}
+                      </Badge>
+                    </Td>
+                    <Td className="tabular-nums" title={String(run.started_at)}>
+                      {relativeTime(run.started_at, now)}
+                    </Td>
+                    <Td>{duration(run.duration_s)}</Td>
+                    <Td className="tabular-nums">{run.rows_written.toLocaleString()}</Td>
+                    <Td className="tabular-nums">{run.failed_units}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableFrame></CardContent>
+        </Card>
+      </section>
+
+      {absent.length > 0 && (
+        <section>
+          <Card>
+            <CardHeader>
+              <CardTitle>Why some tables are missing</CardTitle>
+              <CardDescription>
+                Not a broken pipeline. Three marts wait on a Google Earth Engine service
+                account that is not configured.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2.5">
+              {absent.map((mart) => (
+                <div class="flex items-start gap-2.5 text-sm">
+                  <AlertTriangle
+                    className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-i4)]"
+                    aria-hidden="true"
+                  />
+                  <div>
+                    <p class="font-mono text-xs">{mart.name}</p>
+                    <p class="mt-0.5 text-xs leading-relaxed text-[var(--color-muted)]">
+                      {mart.blockedBy
+                        ? `Blocked by ${mart.blockedBy}. The collector and the models are written; the backfill needs credentials.`
+                        : "Not present in the serving database."}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              <a
+                href="/catalog"
+                class="inline-flex items-center gap-1 pt-1 text-xs text-[var(--color-accent)] underline decoration-dotted"
+              >
+                <Table2 className="h-3 w-3" aria-hidden="true" />
+                Full catalog, with grain and licence per table
+              </a>
+            </CardContent>
+          </Card>
+        </section>
+      )}
+    </>
+  )}
+</Layout>

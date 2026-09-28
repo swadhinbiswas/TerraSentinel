@@ -39,8 +39,15 @@ export function boundaryFor(h3Index: string): Ring {
   const cached = boundaryCache.get(h3Index);
   if (cached) return cached;
 
-  const ring: Ring = cellToBoundary(h3Index).map(([lat, lng]) => [lng, lat]);
-  ring.push([...ring[0]]);
+  const points: Ring = cellToBoundary(h3Index).map(([lat, lng]) => [lng, lat]);
+  const ring: Ring = [...points, [...points[0]]];
+  // Frozen on insert. The cache hands the same array to every later call, so a caller that
+  // mutated it would corrupt every subsequent paint — and the two callers here both pass
+  // the ring straight into a FeatureCollection, so a mutation would be nearly impossible
+  // to trace. Freezing costs one pass per unique cell and turns a silent corruption into
+  // an immediate error. Both call sites only read.
+  for (const point of ring) Object.freeze(point);
+  Object.freeze(ring);
   boundaryCache.set(h3Index, ring);
   return ring;
 }
@@ -91,7 +98,11 @@ export function mercatorX(lng: number): number {
 export function mercatorY(lat: number): number {
   const clamped = Math.max(-MERCATOR_LIMIT, Math.min(MERCATOR_LIMIT, lat));
   const rad = (clamped * Math.PI) / 180;
-  return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2;
+  const y = (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2;
+  // Clamped on the way out as well as on the way in. At the pole the expression lands a
+  // few times 1e-9 outside the unit square, and the canvas fit multiplies this into a
+  // scale and an offset, so a coordinate marginally out of range shifts every point.
+  return Math.min(1, Math.max(0, y));
 }
 
 /** The unit each layer's values are counted in, for readouts and titles. */

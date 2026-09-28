@@ -1,10 +1,25 @@
-import maplibregl, {
-  type GeoJSONSource,
-  type Map as MapLibreMap,
-  type StyleSpecification,
+import type {
+  ExpressionSpecification,
+  GeoJSONSource,
+  Map as MapLibreMap,
+  StyleSpecification,
 } from "maplibre-gl";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import type { MapWindow } from "@/lib/queries";
+import {
+  PERIODS,
+  periodFor,
+  periodsFor,
+  type LayerKey,
+  type PeriodValue,
+} from "@/lib/periods";
 import { useTheme, type Theme } from "@/lib/theme";
 import { formatNumber, rampHex } from "@/lib/utils";
 import { Empty } from "@/components/ui/empty";
@@ -37,45 +52,6 @@ import "maplibre-gl/dist/maplibre-gl.css";
  * about 253 km², so a uniform dot would claim precision the coarse layer does not have.
  */
 
-/** Presets anchored to measured events rather than to calendar windows. */
-const PERIODS = [
-  {
-    value: "recent",
-    label: "Last 30 days",
-    from: (today: string) => shiftDays(today, -30),
-    to: (today: string) => today,
-    hint: "the end of the season, which is quiet",
-  },
-  {
-    value: "iberia2025",
-    label: "Aug 2025 megafire",
-    from: () => "2025-08-13",
-    to: () => "2025-08-19",
-    hint: "13,329 detections on the peak day",
-  },
-  {
-    value: "winter2026",
-    label: "Feb 2026 anomaly",
-    from: () => "2026-02-22",
-    to: () => "2026-02-28",
-    hint: "1,184 detections against a winter median of 66",
-  },
-  {
-    value: "season2026",
-    label: "2026 season",
-    from: () => "2026-06-01",
-    to: () => "2026-09-20",
-    hint: "the whole fire season",
-  },
-  {
-    value: "all",
-    label: "Full record",
-    from: () => "2024-09-01",
-    to: () => "2030-01-01",
-    hint: "every cell in the archive",
-  },
-] as const;
-
 /** Scoping to one region is what makes a window legible: spanning both study regions puts
  *  the camera 38 degrees wide, where 1 km cells are sub-pixel. */
 const REGIONS = [
@@ -84,8 +60,8 @@ const REGIONS = [
   { value: "all", label: "Both regions" },
 ] as const;
 
-const LAYERS = { fire: "Fire detections", sst: "SST anomaly" } as const;
-type LayerKey = keyof typeof LAYERS;
+const LAYERS: Record<LayerKey, string> = { fire: "Fire detections", sst: "SST anomaly" };
+const LAYER_KEYS = Object.keys(LAYERS) as LayerKey[];
 type Engine = "webgl" | "canvas" | null;
 
 /** Keyless, free basemaps. One per theme, so the map stops being a dark hole in a light page. */
@@ -108,16 +84,8 @@ function blankStyle(theme: keyof typeof BACKDROP): StyleSpecification {
 }
 
 /** One ramp lookup, shared by the fill and the point layer so they cannot disagree. */
-function rampExpression(ramp: string[]): maplibregl.ExpressionSpecification {
+function rampExpression(ramp: string[]): ExpressionSpecification {
   return ["match", ["get", "step"], 0, ramp[0], 1, ramp[1], 2, ramp[2], 3, ramp[3], ramp[4]];
-}
-
-type PeriodValue = (typeof PERIODS)[number]["value"];
-
-function shiftDays(iso: string, days: number): string {
-  const date = new Date(`${iso}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
 }
 
 /**
@@ -133,6 +101,9 @@ function attachData(
   payload: MapWindow,
   unit: () => string,
   theme: Theme,
+  // MapLibre is loaded dynamically, after the WebGL probe, so nothing at module scope can
+  // close over it. The one class `attachData` needs is passed in rather than imported.
+  Popup: typeof import("maplibre-gl").Popup,
 ) {
   if (instance.getSource("cells")) return;
   const ramp = rampHex();
@@ -202,7 +173,7 @@ function attachData(
     const feature = event.features?.[0];
     if (!feature) return;
     const props = feature.properties as Record<string, string>;
-    new maplibregl.Popup({ closeButton: true, maxWidth: "260px" })
+    new Popup({ closeButton: true, maxWidth: "260px" })
       .setLngLat(event.lngLat)
       .setDOMContent(
         readoutNode(
@@ -236,8 +207,8 @@ function attachData(
  * an animation, and an animation that never runs leaves the camera on its default
  * centre, which is how this map once rendered nothing while holding 4,392 features.
  */
-function frame(instance: MapLibreMap, payload: MapWindow) {
-  if (payload.cells.length === 0) return;
+function frame(instance: MapLibreMap, payload: MapWindow | null) {
+  if (!payload || payload.cells.length === 0) return;
 
   let west = Infinity;
   let east = -Infinity;
@@ -277,16 +248,17 @@ function frame(instance: MapLibreMap, payload: MapWindow) {
  * empty map never reaches idle. Watching the container means the fit happens the moment
  * there is a size to fit to, whenever that turns out to be.
  */
-function paint(instance: MapLibreMap, payload: MapWindow): () => void {
+function paint(instance: MapLibreMap, payload: MapWindow | null): () => void {
   const source = instance.getSource("cells") as GeoJSONSource | undefined;
+  const teardown: Array<() => void> = [];
+  if (!payload || payload.cells.length === 0) return () => teardown.forEach((stop) => stop());
+
   const write = () => {
     const current = instance.getSource("cells") as GeoJSONSource | undefined;
-    current?.setData(toFeatureCollection(payload.cells, payload.breaks) as never);
+    if (!current) return;
+    current.setData(toFeatureCollection(payload.cells, payload.breaks) as never);
   };
   write();
-
-  const teardown: Array<() => void> = [];
-  if (payload.cells.length === 0) return () => teardown.forEach((stop) => stop());
 
   const container = instance.getContainer();
   if (container.clientWidth > 0) {
@@ -318,17 +290,82 @@ function paint(instance: MapLibreMap, payload: MapWindow): () => void {
   return () => teardown.forEach((stop) => stop());
 }
 
-export default function AnomalyMap({ initial }: { initial: MapWindow }) {
+/**
+ * Read the map's four choices from the query string, and write them back as they change.
+ *
+ * A permalink is only worth having if it survives a reload, so the query string is the
+ * source of truth on mount and every change is reflected into it. `replaceState` rather
+ * than `pushState`: each keystroke on a select should not become a history entry, but the
+ * back button must still leave the page and must not walk through sixty window changes.
+ *
+ * Values are validated against the option lists rather than trusted, because the query
+ * string is user-editable and a bad `layer=foo` would otherwise reach the API and come
+ * back as a silently wrong response. An unrecognised value falls back to the default,
+ * which is what a reader would have got by not editing it.
+ */
+function useUrlState<T extends string>(param: string, options: readonly T[], fallback: T) {
+  const read = useCallback(() => {
+    const raw = new URL(window.location.href).searchParams.get(param);
+    return raw !== null && (options as readonly string[]).includes(raw) ? (raw as T) : fallback;
+  }, [param, options, fallback]);
+
+  const [value, setValue] = useState<T>(read);
+
+  useEffect(() => {
+    // Only once the reader has actually chosen something. Writing the defaults on mount
+    // would rewrite a plain visit to `/` into a four-parameter URL nobody linked to, which
+    // pollutes the referrer for the next page and makes the address bar lie about having
+    // been shared.
+    if (value === fallback) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get(param) === value) return;
+    url.searchParams.set(param, value);
+    // The rest of the query is someone else's: this is an inbound link, and rewriting it
+    // wholesale would drop whatever the sender meant to carry.
+    window.history.replaceState(null, "", url);
+  }, [param, value, fallback]);
+
+  return [value, setValue] as const;
+}
+
+export default function AnomalyMap({ initial }: { initial?: MapWindow }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
+  // The repaint handle: what the last `paint()` registered, so the next one can undo it.
+  // NOT the map's own teardown — the repaint effect calls this on every data change, so
+  // sharing the slot with `instance.remove()` would destroy the map the first time a
+  // window loaded. The two live separately.
   const teardown = useRef<(() => void) | null>(null);
+  // Set once the MapLibre instance exists, cleared on unmount.
+  const destroy = useRef<(() => void) | null>(null);
   const [theme] = useTheme();
 
-  const [layer, setLayer] = useState<LayerKey>("fire");
-  const [period, setPeriod] = useState<PeriodValue>("iberia2025");
-  const [region, setRegion] = useState<string>("iberia_fire");
-  const [mode, setMode] = useState<"all" | "anomalies">("all");
-  const [data, setData] = useState<MapWindow>(initial);
+  // From the query string, so a window can be linked to and the back button leaves the
+  // page rather than walking through every change made to it.
+  const [layer, setLayer] = useUrlState<LayerKey>(
+    "layer",
+    LAYER_KEYS,
+    "fire",
+  );
+  const [period, setPeriod] = useUrlState<PeriodValue>(
+    "window",
+    PERIODS.map((item) => item.value),
+    "iberia2025",
+  );
+  const [region, setRegion] = useUrlState<string>(
+    "region",
+    REGIONS.map((item) => item.value),
+    "iberia_fire",
+  );
+  const [mode, setMode] = useUrlState<"all" | "anomalies">(
+    "cells",
+    ["all", "anomalies"],
+    "all",
+  );
+  // Null until the first response lands. `EMPTY` would render the "no cells in this
+  // window" state during what is actually a load, which is a lie told for a few hundred
+  // milliseconds on every page view.
+  const [data, setData] = useState<MapWindow | null>(initial ?? null);
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   // Null until the probe has run, so the first frame does not commit to a renderer.
@@ -337,25 +374,23 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
   // handler that built the source from a stale closure would paint an empty collection
   // and the first render would show nothing. The ref carries whatever is current into the
   // handler whenever it fires.
-  const latest = useRef<MapWindow>(initial);
+  const latest = useRef<MapWindow | null>(initial ?? null);
   // Written from an effect rather than in the render body. MapLibre's handlers outlive the
   // render that registered them, so they have to read current values through a ref, and a
   // ref write during render is a side effect React development builds warn about.
   const themeRef = useRef(theme);
   // Same reason: the layer handlers print whichever unit is selected when they are clicked,
   // not the one that happened to be current when the style loaded.
-  const unitRef = useRef(unitFor(initial.layer));
+  const unitRef = useRef(unitFor(initial?.layer ?? "fire"));
   const styleApplied = useRef<string | null>(null);
 
   // Recomputed when the theme changes, so the map, the legend and the strip cannot end
   // up on different ends of the ramp.
   const ramp = useMemo(() => rampHex(), [theme]);
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const selected = PERIODS.find((item) => item.value === period) ?? PERIODS[1];
-  const unit = unitFor(data.layer);
   useEffect(() => {
-    unitRef.current = unit;
-  }, [unit]);
+    unitRef.current = unitFor(data?.layer ?? layer);
+  }, [data?.layer, layer]);
   useEffect(() => {
     themeRef.current = theme;
   }, [theme]);
@@ -368,7 +403,7 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
       nextRegion: string,
       signal: AbortSignal,
     ) => {
-      const preset = PERIODS.find((item) => item.value === nextPeriod) ?? PERIODS[1];
+      const preset = periodFor(nextPeriod, nextLayer);
       setLoading(true);
       try {
         const params = new URLSearchParams({
@@ -413,78 +448,123 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
       return;
     }
 
-    let instance: MapLibreMap;
-    try {
-      styleApplied.current = BASEMAP[themeRef.current];
-      instance = new maplibregl.Map({
-        container: container.current,
-        style: BASEMAP[themeRef.current],
-        center: [-3, 42],
-        zoom: 6,
-        attributionControl: { compact: true },
-      });
-    } catch (error) {
-      // MapLibre's constructor is where the WebGL failure surfaces, so this is the only
-      // place the fallback can be chosen from a real failure rather than a prediction.
-      setEngine("canvas");
-      setFailure(error instanceof Error ? error.message : String(error));
-      return;
-    }
+    // Loaded here, after the probe, and not at the top of the module. MapLibre is roughly
+    // two thirds of this island's bundle and is unusable on exactly the browsers that reach
+    // this branch, so a static import would have every one of them download 250 kB
+    // gzipped of a renderer they will never construct. The dynamic import splits it into
+    // its own chunk that only the machines that can run it ever fetch.
+    let cancelled = false;
+    let maplibregl: typeof import("maplibre-gl");
 
-    instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
-    instance.addControl(new maplibregl.ScaleControl({ maxWidth: 90 }), "bottom-left");
-
-    // A basemap URL is given up on once, not on every retry of the same one.
-    let failedStyle: string | null = null;
-    let styleReady = false;
-
-    const reattach = () => {
-      // `style.load` rather than `isStyleLoaded()`. The latter asks whether the basemap's
-      // *tiles* have all arrived, which a streaming vector style can keep false
-      // indefinitely — gating the data layers on it left the map holding 4,392 features
-      // and drawing none of them. What is needed here is the style document, and
-      // `style.load` is the event that says it exists. It also covers the style swap a
-      // theme change triggers, which is what takes the data layers away and gives them
-      // back.
-      if (!instance.getSource("cells")) {
-        attachData(instance, latest.current, () => unitRef.current, themeRef.current);
-        teardown.current?.();
-        teardown.current = paint(instance, latest.current);
+    const boot = async () => {
+      try {
+        // Loaded here, after the probe, rather than at the top of the module. MapLibre is
+        // roughly two thirds of this island's bundle and is unusable on exactly the
+        // browsers that reach this branch, so a static import had every one of them
+        // download ~250 kB gzipped of a renderer they would never construct. The dynamic
+        // import puts it in its own chunk that only machines which can run it fetch.
+        maplibregl = await import("maplibre-gl");
+      } catch (error) {
+        // A chunk that will not load is the same situation as a context that will not be
+        // issued, and the canvas renderer does not care which.
+        if (cancelled) return;
+        setEngine("canvas");
+        setFailure(error instanceof Error ? error.message : String(error));
+        return;
       }
+      // The island can unmount, or the renderer can be chosen elsewhere, while that chunk
+      // is in flight.
+      if (cancelled || !container.current || map.current) return;
+
+      let instance: MapLibreMap;
+      try {
+        styleApplied.current = BASEMAP[themeRef.current];
+        instance = new maplibregl.Map({
+          container: container.current,
+          style: BASEMAP[themeRef.current],
+          center: [-3, 42],
+          zoom: 6,
+          attributionControl: { compact: true },
+        });
+      } catch (error) {
+        // MapLibre's constructor is where the WebGL failure surfaces, so this is the only
+        // place the fallback can be chosen from a real failure rather than a prediction.
+        setEngine("canvas");
+        setFailure(error instanceof Error ? error.message : String(error));
+        return;
+      }
+
+      instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+      instance.addControl(new maplibregl.ScaleControl({ maxWidth: 90 }), "bottom-left");
+
+      // A basemap URL is given up on once, not on every retry of the same one.
+      let failedStyle: string | null = null;
+      let styleReady = false;
+
+      const reattach = () => {
+        // `style.load` rather than `isStyleLoaded()`. The latter asks whether the basemap's
+        // *tiles* have all arrived, which a streaming vector style can keep false
+        // indefinitely — gating the data layers on it left the map holding 4,392 features
+        // and drawing none of them. What is needed here is the style document, and
+        // `style.load` is the event that says it exists. It also covers the style swap a
+        // theme change triggers, which is what takes the data layers away and gives them
+        // back.
+        const current = latest.current;
+        if (current && !instance.getSource("cells")) {
+          attachData(instance, current, () => unitRef.current, themeRef.current, maplibregl.Popup);
+          teardown.current?.();
+          teardown.current = paint(instance, current);
+        }
+      };
+
+      const onStyleReady = () => {
+        styleReady = true;
+        reattach();
+      };
+
+      instance.on("error", () => {
+        // Tile-level errors are the basemap's business and are not fatal. A failure to
+        // fetch the style document is, because without one the data layers have nothing
+        // to attach to. Swapping in a local background keeps the cells on screen.
+        if (styleReady) return;
+        const wanted = styleApplied.current;
+        if (!wanted || wanted === failedStyle) return;
+        failedStyle = wanted;
+        instance.setStyle(blankStyle(themeRef.current));
+      });
+      instance.on("style.load", onStyleReady);
+      instance.on("load", onStyleReady);
+      instance.on("webglcontextlost", () => setEngine("canvas"));
+
+      map.current = instance;
+      setEngine("webgl");
+      // Exposed deliberately for diagnostics. A maplibre canvas that renders nothing is a
+      // black box from the outside, and being able to inspect the source, the layer list
+      // and the viewport from devtools is the difference between diagnosing that and
+      // guessing.
+      (window as unknown as Record<string, unknown>).__terrasentinelMap = instance;
+
+      // The map's own teardown, in its own slot. `teardown` is the repaint handle and is
+      // invoked on every data change, so putting `instance.remove()` there would take the
+      // map down the first time a window loaded.
+      destroy.current = () => {
+        instance.remove();
+        map.current = null;
+        delete (window as unknown as Record<string, unknown>).__terrasentinelMap;
+      };
     };
 
-    const onStyleReady = () => {
-      styleReady = true;
-      reattach();
-    };
+    void boot();
 
-    instance.on("error", () => {
-      // Tile-level errors are the basemap's business and are not fatal. A failure to fetch
-      // the style document is, because without one the data layers have nothing to attach
-      // to. Swapping in a local background keeps the cells on screen.
-      if (styleReady) return;
-      const wanted = styleApplied.current;
-      if (!wanted || wanted === failedStyle) return;
-      failedStyle = wanted;
-      instance.setStyle(blankStyle(themeRef.current));
-    });
-    instance.on("style.load", onStyleReady);
-    instance.on("load", onStyleReady);
-    instance.on("webglcontextlost", () => setEngine("canvas"));
-
-    map.current = instance;
-    setEngine("webgl");
-    // Exposed deliberately for diagnostics. A maplibre canvas that renders nothing is a
-    // black box from the outside, and being able to inspect the source, the layer list and
-    // the viewport from devtools is the difference between diagnosing that and guessing.
-    (window as unknown as Record<string, unknown>).__terrasentinelMap = instance;
-
+    // The effect-level cleanup. Unmounting before the chunk lands must not leave an
+    // orphaned MapLibre instance: the dynamic import resolves *after* this runs, so
+    // without the flag the map would be constructed onto a detached container and never
+    // torn down. Once `boot` has registered the map's own teardown into `teardown.current`,
+    // this runs that too.
     return () => {
-      teardown.current?.();
-      teardown.current = null;
-      map.current = null;
-      delete (window as unknown as Record<string, unknown>).__terrasentinelMap;
-      instance.remove();
+      cancelled = true;
+      destroy.current?.();
+      destroy.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -515,64 +595,205 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
     teardown.current = paint(instance, data);
   }, [data, engine]);
 
-  const hasCells = data.cells.length > 0;
-  const hasScale = data.breaks.length >= 4;
-  const densest = useMemo(() => data.cells.slice(0, 8), [data.cells]);
-  const peak = data.peak;
+  // Switching layers can strand the selected window: "Aug 2025 megafire" is a fire event
+  // and means nothing to the SST mart, which starts in June 2026. A `<select>` whose value
+  // is not among its own options renders blank, so the window has to move with the layer.
+  const availablePeriods = periodsFor(layer);
+  useEffect(() => {
+    if (availablePeriods.includes(period)) return;
+    setPeriod(availablePeriods[0]);
+  }, [availablePeriods, period, setPeriod]);
+
+  // Move the camera to a cell. Called on click and on focus, so tabbing through the densest
+  // list walks the map — which is the point of making that list keyboard-reachable, and
+  // also how the numbers are checked against the rendering without a pointer.
+  const focusCell = useCallback(
+    (cell: { longitude: number; latitude: number }) => {
+      const instance = map.current;
+      if (!instance || engine !== "webgl") return;
+      instance.easeTo({ center: [cell.longitude, cell.latitude], duration: 350 });
+    },
+    [engine],
+  );
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
-        <Select
-          value={period}
-          onChange={(event) => setPeriod(event.target.value as PeriodValue)}
-          aria-label="Period"
-        >
-          {PERIODS.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </Select>
-        <Select
-          value={region}
-          onChange={(event) => setRegion(event.target.value)}
-          aria-label="Region"
-        >
-          {REGIONS.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </Select>
+      <MapControls
+        period={period}
+        onPeriod={setPeriod}
+        region={region}
+        onRegion={setRegion}
+        mode={mode}
+        onMode={setMode}
+        layer={layer}
+        onLayer={setLayer}
+        // The mode tab is phrased by grain, which is only known once a window has arrived.
+        grain={data?.grain ?? "day"}
+        periods={availablePeriods}
+      />
+      {data === null ? (
+        <MapSkeleton />
+      ) : (
+        <MapView
+          data={data}
+          layer={layer}
+          mode={mode}
+          period={period}
+          engine={engine}
+          theme={theme}
+          ramp={ramp}
+          loading={loading}
+          failure={failure}
+          container={container}
+          focusCell={focusCell}
+        />
+      )}
+    </div>
+  );
+}
+
+/** The control strip. Split out because it renders before any window does. */
+function MapControls({
+  period,
+  onPeriod,
+  region,
+  onRegion,
+  mode,
+  onMode,
+  layer,
+  onLayer,
+  grain,
+  periods,
+}: {
+  period: PeriodValue;
+  onPeriod: (value: PeriodValue) => void;
+  region: string;
+  onRegion: (value: string) => void;
+  mode: "all" | "anomalies";
+  onMode: (value: "all" | "anomalies") => void;
+  layer: LayerKey;
+  onLayer: (value: LayerKey) => void;
+  grain: MapWindow["grain"];
+  /** The windows this layer can serve. Passed in rather than recomputed so the dropdown
+   *  and the effect that corrects a stranded selection read from one list. */
+  periods: readonly PeriodValue[];
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
+      <Select value={period} onChange={(event) => onPeriod(event.target.value as PeriodValue)} aria-label="Period">
+        {periods.map((value) => (
+          <option key={value} value={value}>
+            {periodFor(value, layer).label}
+          </option>
+        ))}
+      </Select>
+      <Select value={region} onChange={(event) => onRegion(event.target.value)} aria-label="Region">
+        {REGIONS.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </Select>
+      <Tabs
+        items={[
+          { value: "all", label: "All cells" },
+          {
+            value: "anomalies",
+            label: grain === "month" ? "Anomalous months" : "Anomalous days",
+            hint:
+              grain === "month"
+                ? "only cells in months that contain a flagged day"
+                : "only cells on days the detector flagged",
+          },
+        ]}
+        value={mode}
+        onChange={onMode}
+      />
+      <div className="ml-auto flex items-center gap-3 text-xs text-[var(--color-muted)]">
         <Tabs
           items={[
-            { value: "all", label: "All cells" },
-            {
-              value: "anomalies",
-              label: data.grain === "month" ? "Anomalous months" : "Anomalous days",
-              hint:
-                data.grain === "month"
-                  ? "only cells in months that contain a flagged day"
-                  : "only cells on days the detector flagged",
-            },
+            { value: "fire", label: LAYERS.fire, hint: "H3 res 7, about 5 km², daily" },
+            { value: "sst", label: LAYERS.sst, hint: "H3 res 5, about 253 km², monthly" },
           ]}
-          value={mode}
-          onChange={setMode}
+          value={layer}
+          onChange={onLayer}
+          size="sm"
         />
-        <div className="ml-auto flex items-center gap-3 text-xs text-[var(--color-muted)]">
-          <Tabs
-            items={[
-              { value: "fire", label: LAYERS.fire, hint: "H3 res 7, about 5 km², daily" },
-              { value: "sst", label: LAYERS.sst, hint: "H3 res 5, about 253 km², monthly" },
-            ]}
-            value={layer}
-            onChange={setLayer}
-            size="sm"
-          />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The first paint, before the island's own fetch has answered.
+ *
+ * A frame of the right size rather than the empty state, because "no cells in this window"
+ * is a claim about the data and the data has not arrived yet. It is the one thing this
+ * change costs: the map now appears a round trip later than it used to, in exchange for a
+ * landing page that is 50KB instead of 1.7MB.
+ */
+function MapSkeleton() {
+  return (
+    <div
+      className="h-[clamp(320px,54vh,560px)] w-full bg-[var(--color-background)]"
+      aria-hidden="true"
+    >
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-2">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--color-border)] border-t-[var(--color-accent)]" />
+          <p className="text-xs text-[var(--color-subtle)]">loading the window</p>
         </div>
       </div>
+    </div>
+  );
+}
 
+/** Everything that reads the window, which is now guaranteed to have one. */
+function MapView({
+  data,
+  layer,
+  mode,
+  period,
+  engine,
+  theme,
+  ramp,
+  loading,
+  failure,
+  container,
+  focusCell,
+}: {
+  data: MapWindow;
+  layer: LayerKey;
+  mode: "all" | "anomalies";
+  period: PeriodValue;
+  engine: Engine;
+  theme: Theme;
+  ramp: string[];
+  loading: boolean;
+  failure: string | null;
+  container: RefObject<HTMLDivElement>;
+  /** Moves the camera, so the densest-cell list can be operated from the keyboard. */
+  focusCell: (cell: { longitude: number; latitude: number }) => void;
+}) {
+  // Resolved for the layer, so a shared window does not describe the other layer's data.
+  const selected = periodFor(period, layer);
+  const unit = unitFor(data.layer);
+  const hasCells = data.cells.length > 0;
+  const hasScale = data.breaks.length >= 4;
+  const densest = data.cells.slice(0, 8);
+  const peak = data.peak;
+  // Whether the window is simply outside what this layer holds. Proved from the response's
+  // own coverage bounds rather than assumed, because "no data" has several causes and
+  // naming the wrong one is worse than naming none.
+  const outsideCoverage =
+    data.coverage.from !== "" &&
+    (data.to < data.coverage.from || data.from > data.coverage.to);
+  // The Sentinel layers are the only ones gated on the Earth Engine backfill, so it is the
+  // only layer for which that can be the reason.
+  const sentinelBlocked = data.layer === "sentinel";
+
+  return (
+    <div>
       <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-xs text-[var(--color-muted)]">
         <li>{selected.hint}</li>
         <li className="tabular-nums">
@@ -631,23 +852,44 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
         {!hasCells && !loading && !failure && (
           <div className="absolute inset-x-6 top-6">
             <Empty title="No cells in this window">
-              <p>
-                {mode === "anomalies"
-                  ? data.grain === "month"
-                    ? "No month in this range has a flagged day. Try “All cells”, or a period anchored to a documented event such as August 2025."
-                    : "No day in this range was flagged. Try “All cells”, or a period anchored to a documented event such as August 2025."
-                  : "This window has no data. The Sentinel layers are absent too, until the Earth Engine backfill runs."}
-              </p>
-              {data.coverage.from !== "" &&
-                (data.to < data.coverage.from || data.from > data.coverage.to) && (
-                  <p className="mt-2">
-                    The requested window ({data.from} to {data.to}) falls outside this
-                    layer's coverage, {data.coverage.from} to {data.coverage.to}
+              {/*
+                One cause, stated once, and only a cause the response can actually prove.
+                The previous version named the Earth Engine backfill on every layer, so an
+                SST window with no SST rows was explained by a Sentinel backfill that has
+                nothing to do with it — and a second paragraph then gave the real reason,
+                contradicting the first. Two paragraphs disagreeing is worse than one.
+              */}
+              {outsideCoverage ? (
+                <>
+                  <p>
+                    This layer holds {data.coverage.from} to {data.coverage.to}; the window
+                    asked for {data.from} to {data.to}
                     {data.grain === "month"
-                      ? " — the SST mart is monthly and its backfill is still filling in earlier periods."
+                      ? ". The SST mart is monthly and its backfill is still filling in earlier periods."
                       : "."}
                   </p>
-                )}
+                  <p className="mt-2">
+                    The period list is already limited to the windows this layer has.
+                  </p>
+                </>
+              ) : mode === "anomalies" ? (
+                <p>
+                  {data.grain === "month"
+                    ? "No month in this range contains a flagged day."
+                    : "No day in this range was flagged."}{" "}
+                  Try “All cells”, or a window anchored to a documented event.
+                </p>
+              ) : (
+                <>
+                  <p>This layer has no rows in {data.from} to {data.to}.</p>
+                  {sentinelBlocked && (
+                    <p className="mt-2">
+                      The Sentinel layers are absent for the same reason: their Earth
+                      Engine backfill has not run.
+                    </p>
+                  )}
+                </>
+              )}
             </Empty>
           </div>
         )}
@@ -656,19 +898,62 @@ export default function AnomalyMap({ initial }: { initial: MapWindow }) {
       {/* The densest cells in text. Both renderers are canvases, so a screen reader
           otherwise reaches this map only through the controls above it. */}
       {hasCells && (
-        <p className="sr-only">
-          Densest cells:{" "}
-          {densest
-            .map((cell) => `${formatNumber(cell.value)} ${unit} in ${cell.region_id}`)
-            .join("; ")}
-          .
-        </p>
+        // The keyboard path to the data. The map is a canvas in both renderers, so nothing
+        // drawn in it is focusable and the values are otherwise only reachable with a
+        // pointer. Collapsed rather than removed: this is the accessible interface to the
+        // same numbers the map shows, and a visible duplicate table would be a second
+        // thing to keep in step with the first.
+        <details className="border-t border-[var(--color-border)]">
+          <summary className="cursor-pointer list-none px-4 py-2 text-[11px] text-[var(--color-subtle)] hover:text-[var(--color-muted)]">
+            <span className="font-medium text-[var(--color-muted)]">
+              {densest.length} densest cells
+            </span>{" "}
+            {/* States only what it does. An earlier version of this line also claimed
+                arrow-key navigation, which nothing implemented — a capability claim the
+                reader can check and find false is worse than no claim. Tab reaches every
+                one of these, and focusing one moves the camera. */}
+            <span className="ml-1">
+              — tab through them and the map follows
+              {engine === "canvas"
+                ? "; the canvas renderer has no camera, so use the values above"
+                : ""}
+            </span>
+          </summary>
+          <ol className="border-t border-[var(--color-border)] px-4 py-2">
+            {densest.map((cell) => (
+              <li key={`${cell.h3_index}-${cell.period_start}`}>
+                <button
+                  type="button"
+                  onClick={() => focusCell(cell)}
+                  onFocus={() => focusCell(cell)}
+                  className="w-full rounded px-1 py-1 text-left text-[11px] tabular-nums hover:bg-[var(--color-surface)] focus-visible:bg-[var(--color-surface)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]"
+                >
+                  <span className="font-medium text-[var(--color-foreground)]">
+                    {formatNumber(cell.value)} {unit}
+                  </span>{" "}
+                  <span className="text-[var(--color-muted)]">
+                    {cell.region_id.replace(/_/g, " ")}, {cell.period_start.slice(0, 10)}
+                  </span>{" "}
+                  <span className="text-[var(--color-subtle)]">
+                    {cell.latitude.toFixed(2)}, {cell.longitude.toFixed(2)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </details>
       )}
 
       {hasCells && hasScale && (
         <Legend breaks={data.breaks} domain={data.domain} layer={layer} grain={data.grain} ramp={ramp} />
       )}
-      <ActivityStrip activity={data.activity} grain={data.grain} ramp={ramp} />
+      <ActivityStrip
+        activity={data.activity}
+        grain={data.grain}
+        ramp={ramp}
+        truncated={data.truncated}
+        shown={data.cells.length}
+      />
     </div>
   );
 }
@@ -740,10 +1025,15 @@ function ActivityStrip({
   activity,
   grain,
   ramp,
+  truncated,
+  shown,
 }: {
   activity: MapWindow["activity"];
   grain: MapWindow["grain"];
   ramp: string[];
+  /** Whether the cell cap dropped rows, and how many survived it. */
+  truncated: boolean;
+  shown: number;
 }) {
   const unit = grain === "month" ? "month" : "day";
 
@@ -786,6 +1076,16 @@ function ActivityStrip({
           );
         })}
       </div>
+      {truncated && (
+        // The strip counts every cell in the window; the map above draws only the densest
+        // `shown`. Saying so here is what stops a reader from reading a bar as "these are
+        // the cells on the map" when some of them were never sent.
+        <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--color-subtle)]">
+          These bars count all {formatNumber(activity.reduce((sum, row) => sum + row.cells, 0))}{" "}
+          cells in the window. The map draws the {formatNumber(shown)} densest of them, so
+          the quietest cells of a busy day are not shown.
+        </p>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, Td, Th } from "@/components/ui/table";
 import Layout from "@/layouts/Layout.astro";
+import PageHeader from "@/components/ui/page-header.astro";
 
 export const prerender = false;
 
@@ -9,7 +10,7 @@ const PIPELINE = [
   { stage: "Collect", where: "GitHub Actions (cron)", what: "Python collectors pull FIRMS, Sentinel and NOAA/NSIDC. Backoff, a per-source circuit breaker, Pandera checks at ingress and egress, H3 indexing and partitioned writes all come from one base class." },
   { stage: "Store", where: "Hugging Face Hub datasets", what: "Bronze parquet, git-backed, so every landing is versioned and attributable to a commit. Partitioned by source, region and period; the one-time historical pull lives under backfill/." },
   { stage: "Transform", where: "dbt + DuckDB", what: "staging → intermediate → gold. The lake is mirrored locally first, because DuckDB re-lists a remote repo tree on every query and that exhausts the Hub's API quota." },
-  { stage: "Train", where: "GitHub Actions", what: "Isolation Forest on strictly causal features, tracked in MLflow with the exact dataset commit hash, published to a Hugging Face model repo with a generated model card." },
+  { stage: "Train", where: "GitHub Actions", what: "Isolation Forest on strictly causal features. Every run is logged with the exact dataset commit hash that produced it — in MLflow where it is installed, and to a run record where it is not, so a model is never published without the data behind it. The bundle goes to a Hugging Face model repo with a generated model card." },
   { stage: "Score", where: "GitHub Actions", what: "Batch scoring applies the registered model to the latest gold features and upserts percentiles into the serving database. Nothing infers on the request path." },
   { stage: "Serve", where: "Cloudflare Pages", what: "Astro API routes run as Pages Functions and read Turso over its HTTP protocol, which is what makes an edge runtime workable without a proxy service." },
 ];
@@ -36,14 +37,19 @@ const LIMITATIONS = [
 ---
 
 <Layout title="TerraSentinel — docs" description="Method, architecture, decisions and limitations.">
-  <section class="mb-5 max-w-3xl">
-    <h2 class="text-xl font-semibold tracking-tight">How this works, and what it cannot tell you</h2>
-    <p class="mt-2 text-sm text-[var(--color-muted)]">
+  <PageHeader
+    eyebrow="Method and limits"
+    title="How this works, and what it cannot tell you"
+  >
+    <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
       An unsupervised anomaly-detection pipeline over free satellite and sensor data, running
       entirely on free tiers. GitHub Actions does the compute, Hugging Face Hub holds the lake
-      and the model registry, Turso serves the gold tables, and Cloudflare Pages serves this page.
+      and the model registry, Turso serves the gold tables, and Cloudflare Pages serves this
+      page. The
+      <a href="/pipeline" class="text-[var(--color-accent)] underline decoration-dotted">pipeline page</a>
+      shows it running.
     </p>
-  </section>
+  </PageHeader>
 
   <section class="mb-5">
     <Card>

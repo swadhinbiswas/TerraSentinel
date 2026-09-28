@@ -8,7 +8,10 @@
     "build": "astro check && astro build",
     "build:fast": "astro build",
     "preview": "astro preview",
-    "deploy": "wrangler pages deploy dist"
+    "deploy": "wrangler pages deploy dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "astro check"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.5.0",
@@ -18,9 +21,11 @@
     "astro": "^5.13.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cn": "^0.4.0",
     "h3-js": "^4.1.0",
     "lucide-react": "^0.469.0",
     "maplibre-gl": "^5.0.0",
+    "radix-ui": "^1.6.7",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwind-merge": "^2.6.0",
@@ -32,7 +37,10 @@
     "@img/sharp-linux-x64": "0.33.5",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "happy-dom": "^20.14.5",
+    "tw-animate-css": "^1.4.0",
     "typescript": "^5.7.0",
+    "vitest": "^3.2.7",
     "wrangler": "^3.99.0"
   },
   "overrides": {

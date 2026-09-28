@@ -2,10 +2,11 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Stat } from "@/components/ui/stat";
-import { Table, Td, Th } from "@/components/ui/table";
+import { Table, TableFrame, Td, Th } from "@/components/ui/table";
 import { catalog } from "@/lib/queries";
 import { turso } from "@/lib/turso";
 import Layout from "@/layouts/Layout.astro";
+import PageHeader from "@/components/ui/page-header.astro";
 
 export const prerender = false;
 
@@ -29,6 +30,17 @@ const fmt = (value: number | null | undefined) =>
 ---
 
 <Layout title="TerraSentinel — data catalog" description="Every table, its source, grain and licence.">
+  <PageHeader
+    eyebrow="Data catalog"
+    title="Every table, its source, grain and licence"
+  >
+    <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+      The registry is the single source of truth for what the serving database can hold, what
+      the explorer is allowed to read, and what "absent" means. A table shown as awaiting
+      backfill is documented, not missing.
+    </p>
+  </PageHeader>
+
   <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
     <Stat label="Tables live" value={`${present.length} of ${tables.length}`} />
     <Stat label="Rows served" value={fmt(totalRows)} />
@@ -108,7 +120,7 @@ const fmt = (value: number | null | undefined) =>
         <CardDescription>All four providers carry terms for open data use.</CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
-        <Table>
+        <TableFrame><Table>
           <thead><tr><Th>Source</Th><Th>Products</Th><Th>Terms</Th></tr></thead>
           <tbody>
             <tr>
@@ -133,7 +145,7 @@ const fmt = (value: number | null | undefined) =>
             </tr>
           </tbody>
         </Table>
-      </CardContent>
+      </TableFrame></CardContent>
       <CardContent className="pt-0 text-xs text-[var(--color-muted)]">
         The footer attribution is rendered from the <code class="font-mono">sources</code> table in the
         serving database, which the pipeline upserts on every run, so it cannot drift from the
